@@ -116,6 +116,36 @@ chart-test:
 	helm unittest operator/charts
 
 # -----------------------------------------------------------
+# Air-gap / ImageLock
+# -----------------------------------------------------------
+
+IMAGE_LOCK_OUT_DIR ?= $(CURDIR)/dist
+IMAGE_LOCK_CATALOG ?= $(CURDIR)/hack/imagelock/catalog.yaml
+IMAGE_LOCK_CHART_VALUES ?= $(CURDIR)/operator/charts/values.yaml
+IMAGE_LOCK_IMAGE_ARGS = $(foreach image,$(IMAGES),--expected-image $(image))
+
+.PHONY: image-lock image-lock-verify image-lock-test
+
+image-lock:
+	@test -n "$(VERSION)" || { echo "VERSION is required (for example: make image-lock VERSION=v1.2.3)" >&2; exit 1; }
+	GOWORK=off go -C hack/imagelock run . \
+		--version "$(VERSION)" \
+		--catalog "$(IMAGE_LOCK_CATALOG)" \
+		--chart-values "$(IMAGE_LOCK_CHART_VALUES)" \
+		--out-dir "$(IMAGE_LOCK_OUT_DIR)" \
+		$(IMAGE_LOCK_IMAGE_ARGS)
+
+image-lock-verify:
+	GOWORK=off go -C hack/imagelock run . \
+		--verify-only \
+		--catalog "$(IMAGE_LOCK_CATALOG)" \
+		--chart-values "$(IMAGE_LOCK_CHART_VALUES)" \
+		$(IMAGE_LOCK_IMAGE_ARGS)
+
+image-lock-test:
+	GOWORK=off go -C hack/imagelock test ./...
+
+# -----------------------------------------------------------
 # E2E — see test/e2e/e2e.mk (targets: e2e, e2e-cluster-up/down,
 # e2e-deploy/undeploy, test-e2e, test-e2e-metrics).
 # -----------------------------------------------------------

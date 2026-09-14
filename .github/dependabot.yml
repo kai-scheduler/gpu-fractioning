@@ -29,6 +29,21 @@ updates:
         patterns:
           - "*"
 
+  # The ImageLock generator intentionally stays outside go.work so its release
+  # tooling dependencies do not enter the shipped module and attribution graph.
+  - package-ecosystem: gomod
+    directory: /hack/imagelock
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "chore(deps):"
+    groups:
+      imagelock-dependencies:
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

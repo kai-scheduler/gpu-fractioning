@@ -6,7 +6,7 @@ name: Release
 # Cutting a release: publish a GitHub Release for the tag (write the notes in the UI, or
 # use "Generate release notes"). That fires this workflow, which:
 #   1. builds + pushes the multi-arch images and chart to ghcr (reuses push-artifacts.yaml), and
-#   2. attaches the packaged chart .tgz to the Release for direct download.
+#   2. attaches the packaged chart and architecture-specific ImageLocks to the Release.
 #
 # No PAT needed — the built-in `release: published` event triggers this, and the reusable
 # push-artifacts job inherits GITHUB_TOKEN (packages: write) via `secrets: inherit`.
@@ -26,8 +26,8 @@ jobs:
       version: ${{ github.event.release.tag_name }}
     secrets: inherit
 
-  attach-chart:
-    name: Attach chart to Release
+  attach-release-artifacts:
+    name: Attach release artifacts
     needs: push-artifacts
     runs-on: ubuntu-latest
     steps:
@@ -43,4 +43,28 @@ jobs:
       - name: Upload chart as Release asset
         uses: softprops/action-gh-release@v3
         with:
+          fail_on_unmatched_files: true
           files: dist/gpu-fractioning-${{ github.event.release.tag_name }}.tgz
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: hack/imagelock/go.mod
+          cache-dependency-path: hack/imagelock/go.sum
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate ImageLocks
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: make image-lock VERSION="$VERSION"
+
+      - name: Upload ImageLocks as Release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          files: dist/imagelock-*.yaml

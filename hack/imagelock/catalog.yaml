@@ -1,0 +1,31 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: imagelock.kai-scheduler.io/v1alpha1
+name: kai-gpu-fractioning
+artifactName: gpu-fractioning
+repository: ghcr.io/kai-scheduler/kai-gpu-fractioning
+
+images:
+  - name: operator
+  - name: fractiond
+  - name: metricsd
+  - name: mpsd
+
+profiles:
+  - name: standard
+    tagTemplate: "{{version}}"
+  - name: fips
+    tagTemplate: "{{version}}-fips"
+
+platforms:
+  - os: linux
+    architecture: amd64
+  - os: linux
+    architecture: arm64
+
+# Exclusions remove deliberately unsupported image/profile/platform
+# combinations from the generated matrix. Every exclusion must identify known
+# catalog values, match at least one combination, and include a reason. Use "*"
+# to match every value in one dimension.
+exclude: []
