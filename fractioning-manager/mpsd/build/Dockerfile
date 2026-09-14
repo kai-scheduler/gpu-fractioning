@@ -6,7 +6,7 @@
 # cross-compiling cgo needs a target cross-toolchain. Running this stage as
 # $TARGETPLATFORM uses the native compiler for that platform (emulated by
 # buildx/qemu when host != target).
-FROM --platform=$TARGETPLATFORM golang:1.27.0-bookworm AS builder
+FROM --platform=$TARGETPLATFORM golang:1.27.1-bookworm AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 # GOFIPS140 selects the Go Cryptographic Module version to link. "off" is the Go
