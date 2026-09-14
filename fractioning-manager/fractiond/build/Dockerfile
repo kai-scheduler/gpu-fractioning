@@ -21,7 +21,7 @@ RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go buil
 # statically-linked Go binary with no GPU or OS-level dependencies — it only
 # communicates via the NRI Unix socket — so nothing from the base is needed
 # beyond a filesystem to run in, and no OS packages are added.
-FROM nvcr.io/nvidia/distroless/go:v4.1.2
+FROM nvcr.io/nvidia/distroless/go:v4.1.3
 COPY --from=builder /workspace/fractiond /fractiond
 # Attribution for the third-party code statically linked into the binary.
 COPY THIRD-PARTY.txt /THIRD-PARTY.txt
