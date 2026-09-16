@@ -159,6 +159,14 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 100Mi
+            limits:
+              memory: 128Mi
+              ephemeral-storage: 1Gi
           command: ["/scripts/entrypoint.sh"]
           env:
             - name: GPU_COUNT

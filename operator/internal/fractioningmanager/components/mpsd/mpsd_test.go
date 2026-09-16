@@ -93,9 +93,13 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 		t.Errorf("liveness FailureThreshold = %d, want 6", ctr.LivenessProbe.FailureThreshold)
 	}
 
-	// Resources: CPU + memory requests, a memory limit, and no CPU limit.
+	// Resources: CPU + memory + ephemeral-storage requests, a memory limit, and
+	// no CPU limit.
 	if ctr.Resources.Requests.Cpu().IsZero() || ctr.Resources.Requests.Memory().IsZero() {
 		t.Error("expected CPU and memory requests on mpsd")
+	}
+	if ctr.Resources.Requests.StorageEphemeral().IsZero() {
+		t.Error("expected an ephemeral-storage request on mpsd")
 	}
 	if got := ctr.Resources.Limits.Memory().String(); got != mpsdMemLimit {
 		t.Errorf("memory limit = %q, want %q", got, mpsdMemLimit)

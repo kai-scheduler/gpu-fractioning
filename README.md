@@ -119,10 +119,18 @@ metadata:
     # limit is optional; omit it and it defaults to the request
     nvidia.com/container.trainer.gpu-memory.limit: 16Gi
 spec:
+  automountServiceAccountToken: false
   containers:
     - name: trainer
       image: nvcr.io/nvidia/cuda:12.4.1-base-ubuntu22.04
       command: ["sleep", "infinity"]
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+          ephemeral-storage: 1Gi
+        limits:
+          memory: 2Gi
 ```
 
 - The container name in the annotation key selects which container the limits apply to; a pod may carry annotations for several containers.
