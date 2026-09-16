@@ -42,11 +42,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Extract libnvidia-ml.so from the nvml-mock image. The nvml-mock DaemonSet
 # copies it to the host at runtime; here we capture it at its pre-copy location
 # inside the image so it can be baked into the metricsd container directly.
-#
-# Pinned by digest, not :latest — upstream retags :latest in place, so a build
-# that passed yesterday can silently pick up a different library today. This is
-# the same multi-arch index digest the nvml-mock DaemonSet uses (see
-# deploy/fake-gpu-cluster/nvml-mock.yaml); bump the two together.
 FROM ghcr.io/nvidia/nvml-mock@sha256:2718efebb1695121f0d3f1a4325a22050a2e95362d98f4f3abe9f70dd7316e9c AS nvml-mock
 # The image ships both libnvidia-ml.so.1 (14 MiB ELF) and .h header files
 # whose names also match "libnvidia-ml.so*". Copying by exact soname path

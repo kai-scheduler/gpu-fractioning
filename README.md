@@ -119,14 +119,11 @@ metadata:
     # limit is optional; omit it and it defaults to the request
     nvidia.com/container.trainer.gpu-memory.limit: 16Gi
 spec:
-  # This pod talks to the GPU, not to the Kubernetes API.
   automountServiceAccountToken: false
   containers:
     - name: trainer
       image: nvcr.io/nvidia/cuda:12.4.1-base-ubuntu22.04
       command: ["sleep", "infinity"]
-      # CPU/memory/storage are ordinary Kubernetes resources and are unrelated
-      # to the GPU-memory annotations above — set them as you would on any pod.
       resources:
         requests:
           cpu: 500m

@@ -41,12 +41,6 @@ RUN cd /fake-mps-src && \
 
 # Extract libnvidia-ml.so from the nvml-mock image so mpsd can read a fake
 # driver version before it starts the fake MPS control binary.
-#
-# Pinned by digest, not :latest — upstream retags :latest in place, so a build
-# that passed yesterday can silently pick up a different library today. This is
-# the same multi-arch index digest the nvml-mock DaemonSet uses (see
-# fractioning-manager/metricsd/deploy/fake-gpu-cluster/nvml-mock.yaml); bump the
-# two together.
 FROM ghcr.io/nvidia/nvml-mock@sha256:2718efebb1695121f0d3f1a4325a22050a2e95362d98f4f3abe9f70dd7316e9c AS nvml-mock
 RUN cp /usr/local/lib/libnvidia-ml.so.1 /libnvidia-ml.so.1 && \
     chmod 755 /libnvidia-ml.so.1 && \

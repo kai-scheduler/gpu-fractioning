@@ -56,14 +56,6 @@ func BaseDaemonSet(component, namespace string) *appsv1.DaemonSet {
 	}
 }
 
-// daemonEphemeralStorageRequest is the ephemeral-storage request shared by every
-// managed daemon container. The daemons only write container logs and a little
-// scratch (their persistent paths are hostPath mounts), so the figure is small,
-// but declaring it keeps the node's ephemeral storage accounted for at
-// scheduling time instead of leaving these pods in the unbounded best-effort
-// class for that resource. No ephemeral-storage limit is set, for the same
-// reason no CPU limit is: an eviction here would take a privileged system daemon
-// down with it.
 const daemonEphemeralStorageRequest = "100Mi"
 
 // DaemonResources returns the resource requests and limits for a managed system
