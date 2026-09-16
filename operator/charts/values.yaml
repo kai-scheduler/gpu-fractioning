@@ -120,6 +120,10 @@ prometheus:
   # selector label) so your Prometheus instance selects them.
   additionalLabels: {}
 
+# Controller resources. Requests cover CPU, memory and ephemeral storage so the
+# scheduler accounts for all three; only memory is capped — a CPU limit would
+# throttle reconciles and an ephemeral-storage limit would evict the controller
+# over its own logs.
 resources:
   operator:
     limits:
@@ -128,6 +132,7 @@ resources:
     requests:
       cpu: 100m
       memory: 64Mi
+      ephemeral-storage: 100Mi
 
 nodeSelector: {}
 tolerations: []

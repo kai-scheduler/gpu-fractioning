@@ -159,6 +159,17 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
+          # The mock only copies a shared library onto the host and idles, so the
+          # requests are deliberately tiny — they exist so the pod is accounted
+          # for rather than best-effort. Memory is capped; CPU is not, to match
+          # the other node daemons.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 100Mi
+            limits:
+              memory: 128Mi
           command: ["/scripts/entrypoint.sh"]
           env:
             - name: GPU_COUNT

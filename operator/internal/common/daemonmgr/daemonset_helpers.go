@@ -56,16 +56,28 @@ func BaseDaemonSet(component, namespace string) *appsv1.DaemonSet {
 	}
 }
 
+// daemonEphemeralStorageRequest is the ephemeral-storage request shared by every
+// managed daemon container. The daemons only write container logs and a little
+// scratch (their persistent paths are hostPath mounts), so the figure is small,
+// but declaring it keeps the node's ephemeral storage accounted for at
+// scheduling time instead of leaving these pods in the unbounded best-effort
+// class for that resource. No ephemeral-storage limit is set, for the same
+// reason no CPU limit is: an eviction here would take a privileged system daemon
+// down with it.
+const daemonEphemeralStorageRequest = "100Mi"
+
 // DaemonResources returns the resource requests and limits for a managed system
-// daemon container. CPU and memory requests are always set so the pods get a
-// predictable QoS and the scheduler accounts for them; only a memory limit is
-// applied (no CPU limit) so these latency-sensitive privileged daemons are never
-// CPU-throttled while the node is still protected from a runaway memory leak.
+// daemon container. CPU, memory and ephemeral-storage requests are always set so
+// the pods get a predictable QoS and the scheduler accounts for them; only a
+// memory limit is applied (no CPU limit) so these latency-sensitive privileged
+// daemons are never CPU-throttled while the node is still protected from a
+// runaway memory leak.
 func DaemonResources(cpuRequest, memRequest, memLimit string) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{
-			corev1.ResourceCPU:    resource.MustParse(cpuRequest),
-			corev1.ResourceMemory: resource.MustParse(memRequest),
+			corev1.ResourceCPU:              resource.MustParse(cpuRequest),
+			corev1.ResourceMemory:           resource.MustParse(memRequest),
+			corev1.ResourceEphemeralStorage: resource.MustParse(daemonEphemeralStorageRequest),
 		},
 		Limits: corev1.ResourceList{
 			corev1.ResourceMemory: resource.MustParse(memLimit),

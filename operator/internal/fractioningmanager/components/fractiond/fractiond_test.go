@@ -362,8 +362,9 @@ func TestDaemon_BuildDaemonSet_MetricsdProbesAndResources(t *testing.T) {
 	assertDaemonResources(t, metricsd, metricsdMemLimit)
 }
 
-// assertDaemonResources checks the shared daemon resource contract: CPU + memory
-// requests set, a memory limit equal to wantMemLimit, and no CPU limit.
+// assertDaemonResources checks the shared daemon resource contract: CPU, memory
+// and ephemeral-storage requests set, a memory limit equal to wantMemLimit, and
+// no CPU limit.
 func assertDaemonResources(t *testing.T, ctr corev1.Container, wantMemLimit string) {
 	t.Helper()
 	if ctr.Resources.Requests.Cpu().IsZero() {
@@ -371,6 +372,9 @@ func assertDaemonResources(t *testing.T, ctr corev1.Container, wantMemLimit stri
 	}
 	if ctr.Resources.Requests.Memory().IsZero() {
 		t.Error("expected a memory request")
+	}
+	if ctr.Resources.Requests.StorageEphemeral().IsZero() {
+		t.Error("expected an ephemeral-storage request")
 	}
 	if got := ctr.Resources.Limits.Memory().String(); got != wantMemLimit {
 		t.Errorf("memory limit = %q, want %q", got, wantMemLimit)
