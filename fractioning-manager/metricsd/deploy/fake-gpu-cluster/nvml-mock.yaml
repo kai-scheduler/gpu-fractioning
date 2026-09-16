@@ -141,6 +141,11 @@ spec:
         app: nvml-mock
     spec:
       serviceAccountName: nvml-mock
+      # Required by the e2e harness, not by setup.sh: nvmlmock.HostPID execs in
+      # here and scans /proc/[0-9]*/cmdline to resolve a workload pod's host PID
+      # by marker. Without the host PID namespace that scan matches nothing and
+      # every metrics test that pins a PID fails.
+      hostPID: true
       terminationGracePeriodSeconds: 10
       nodeSelector:
         nvidia.com/gpu.present: "true"
@@ -156,13 +161,11 @@ spec:
           # Bump it deliberately, together with the command paths below.
           image: ghcr.io/nvidia/nvml-mock@sha256:2718efebb1695121f0d3f1a4325a22050a2e95362d98f4f3abe9f70dd7316e9c
           imagePullPolicy: IfNotPresent
+          # Kept with hostPID above: the /proc scan reads the cmdline of
+          # workload processes this container does not own, so dropping
+          # capabilities here risks EACCES depending on the target's UID.
           securityContext:
-            privileged: false
-            allowPrivilegeEscalation: false
-            runAsUser: 0
-            capabilities:
-              drop:
-                - ALL
+            privileged: true
           resources:
             requests:
               cpu: 10m
