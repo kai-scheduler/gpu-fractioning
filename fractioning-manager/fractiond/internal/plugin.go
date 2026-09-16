@@ -281,10 +281,10 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	adj := &api.ContainerAdjustment{}
 
 	if gpuMemoryCfg.Request != "" {
-		adj.AddEnv(injection.EnvGPUMemoryRequests, gpuMemoryCfg.Request)
+		adj.AddEnv(injection.EnvGPUMemoryRequest, gpuMemoryCfg.Request)
 	}
 	if gpuMemoryCfg.Limit != "" {
-		adj.AddEnv(injection.EnvGPUMemoryLimits, gpuMemoryCfg.Limit)
+		adj.AddEnv(injection.EnvGPUMemoryLimit, gpuMemoryCfg.Limit)
 	}
 	adj.AddEnv(injection.EnvMPSPipeDirectory, pipeDestination)
 

@@ -179,11 +179,11 @@ func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevic
 	if !env[injection.EnvMPSPipeDirectory] {
 		missing = append(missing, "env:"+injection.EnvMPSPipeDirectory)
 	}
-	if cfg.Limit != "" && !env[injection.EnvGPUMemoryLimits] {
-		missing = append(missing, "env:"+injection.EnvGPUMemoryLimits)
+	if cfg.Limit != "" && !env[injection.EnvGPUMemoryLimit] {
+		missing = append(missing, "env:"+injection.EnvGPUMemoryLimit)
 	}
-	if cfg.Request != "" && !env[injection.EnvGPUMemoryRequests] {
-		missing = append(missing, "env:"+injection.EnvGPUMemoryRequests)
+	if cfg.Request != "" && !env[injection.EnvGPUMemoryRequest] {
+		missing = append(missing, "env:"+injection.EnvGPUMemoryRequest)
 	}
 	if visibleDevices != "" && !env[injection.EnvVisibleDevices] {
 		missing = append(missing, "env:"+injection.EnvVisibleDevices)

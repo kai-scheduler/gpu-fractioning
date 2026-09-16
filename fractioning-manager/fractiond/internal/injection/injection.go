@@ -18,10 +18,16 @@ import (
 )
 
 // Injected env-var keys the create hook sets on a GPU-fractioning container.
+//
+// The two GPU-memory keys are a contract with the NVIDIA container toolkit's
+// apply-cuda-memory-limits CDI hook: it reads them off the OCI spec (values in
+// whole MiB) and applies them to the container's cgroup through NVML. The hook
+// returns early when neither is present, so these exact spellings — singular,
+// not plural — are what makes an injected limit take effect.
 const (
-	EnvGPUMemoryRequests = "NVIDIA_GPU_MEMORY_REQUESTS"
-	EnvGPUMemoryLimits   = "NVIDIA_GPU_MEMORY_LIMITS"
-	EnvMPSPipeDirectory  = "CUDA_MPS_PIPE_DIRECTORY"
+	EnvGPUMemoryRequest = "NVIDIA_GPU_MEMORY_REQUEST"
+	EnvGPUMemoryLimit   = "NVIDIA_GPU_MEMORY_LIMIT"
+	EnvMPSPipeDirectory = "CUDA_MPS_PIPE_DIRECTORY"
 
 	// EnvVisibleDevices selects the physical GPU(s) the NVIDIA container runtime
 	// exposes to the container. The create hook sets it from the scheduler's
@@ -40,8 +46,8 @@ const (
 // this single list so a newly added key is never missed in one place while being
 // added in another.
 var AllEnvKeys = []string{
-	EnvGPUMemoryRequests,
-	EnvGPUMemoryLimits,
+	EnvGPUMemoryRequest,
+	EnvGPUMemoryLimit,
 	EnvMPSPipeDirectory,
 	EnvVisibleDevices,
 }

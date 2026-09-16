@@ -81,8 +81,8 @@ func caseCustomAnnotationPrefix(ctx context.Context, t *testing.T) {
 		})
 		env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
 		want := mib
-		if env[harness.EnvGPUMemRequests] != want {
-			t.Errorf("custom-prefix injection: %s = %q, want %q (default-prefix value must be ignored)", harness.EnvGPUMemRequests, env[harness.EnvGPUMemRequests], want)
+		if env[harness.EnvGPUMemRequest] != want {
+			t.Errorf("custom-prefix injection: %s = %q, want %q (default-prefix value must be ignored)", harness.EnvGPUMemRequest, env[harness.EnvGPUMemRequest], want)
 		}
 	})
 }

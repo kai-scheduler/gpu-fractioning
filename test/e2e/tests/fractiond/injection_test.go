@@ -32,11 +32,11 @@ func caseInjectsMemoryEnv(ctx context.Context, t *testing.T) {
 
 	wantReq := harness.MemRequestMiB
 	wantLim := harness.MemLimitMiB
-	if env[harness.EnvGPUMemRequests] != wantReq {
-		t.Errorf("%s = %q, want %q", harness.EnvGPUMemRequests, env[harness.EnvGPUMemRequests], wantReq)
+	if env[harness.EnvGPUMemRequest] != wantReq {
+		t.Errorf("%s = %q, want %q", harness.EnvGPUMemRequest, env[harness.EnvGPUMemRequest], wantReq)
 	}
-	if env[harness.EnvGPUMemLimits] != wantLim {
-		t.Errorf("%s = %q, want %q", harness.EnvGPUMemLimits, env[harness.EnvGPUMemLimits], wantLim)
+	if env[harness.EnvGPUMemLimit] != wantLim {
+		t.Errorf("%s = %q, want %q", harness.EnvGPUMemLimit, env[harness.EnvGPUMemLimit], wantLim)
 	}
 	if env[harness.EnvMPSPipeDir] != harness.MPSPipeDir {
 		t.Errorf("%s = %q, want %q", harness.EnvMPSPipeDir, env[harness.EnvMPSPipeDir], harness.MPSPipeDir)
@@ -199,19 +199,19 @@ func caseMultiContainerInjection(ctx context.Context, t *testing.T) {
 	wantB := memB
 
 	envA := h.GetPodEnv(ctx, t, pod, ctrA)
-	if envA[harness.EnvGPUMemLimits] != wantA || envA[harness.EnvGPUMemRequests] != wantA {
+	if envA[harness.EnvGPUMemLimit] != wantA || envA[harness.EnvGPUMemRequest] != wantA {
 		t.Errorf("container %s: req=%q lim=%q, want both %q", ctrA,
-			envA[harness.EnvGPUMemRequests], envA[harness.EnvGPUMemLimits], wantA)
+			envA[harness.EnvGPUMemRequest], envA[harness.EnvGPUMemLimit], wantA)
 	}
 	// Isolation: container A must not receive container B's config.
-	if envA[harness.EnvGPUMemLimits] == wantB {
+	if envA[harness.EnvGPUMemLimit] == wantB {
 		t.Errorf("container %s leaked container %s's limit %q", ctrA, ctrB, wantB)
 	}
 
 	envB := h.GetPodEnv(ctx, t, pod, ctrB)
-	if envB[harness.EnvGPUMemLimits] != wantB || envB[harness.EnvGPUMemRequests] != wantB {
+	if envB[harness.EnvGPUMemLimit] != wantB || envB[harness.EnvGPUMemRequest] != wantB {
 		t.Errorf("container %s: req=%q lim=%q, want both %q", ctrB,
-			envB[harness.EnvGPUMemRequests], envB[harness.EnvGPUMemLimits], wantB)
+			envB[harness.EnvGPUMemRequest], envB[harness.EnvGPUMemLimit], wantB)
 	}
 }
 
@@ -220,7 +220,7 @@ func caseMultiContainerInjection(ctx context.Context, t *testing.T) {
 func caseSkipsUnannotatedContainer(ctx context.Context, t *testing.T) {
 	pod := h.ApplyRunningWorkload(ctx, t, "d3-plain", map[string]string{}) // empty ⇒ no annotations
 	env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
-	for _, k := range []string{harness.EnvGPUMemRequests, harness.EnvGPUMemLimits, harness.EnvMPSPipeDir} {
+	for _, k := range []string{harness.EnvGPUMemRequest, harness.EnvGPUMemLimit, harness.EnvMPSPipeDir} {
 		if _, ok := env[k]; ok {
 			t.Errorf("unannotated container has injected env %s=%q", k, env[k])
 		}
@@ -237,8 +237,8 @@ func caseRequestOrLimitOnly(ctx context.Context, t *testing.T) {
 			h.AnnKey(harness.WorkloadContainer, "request"): harness.MemRequestMiB + "Mi",
 		})
 		env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
-		if env[harness.EnvGPUMemRequests] != want || env[harness.EnvGPUMemLimits] != want {
-			t.Errorf("request-only: req=%q lim=%q, want both %q", env[harness.EnvGPUMemRequests], env[harness.EnvGPUMemLimits], want)
+		if env[harness.EnvGPUMemRequest] != want || env[harness.EnvGPUMemLimit] != want {
+			t.Errorf("request-only: req=%q lim=%q, want both %q", env[harness.EnvGPUMemRequest], env[harness.EnvGPUMemLimit], want)
 		}
 	})
 	t.Run("limit-only", func(t *testing.T) {
@@ -247,8 +247,8 @@ func caseRequestOrLimitOnly(ctx context.Context, t *testing.T) {
 			h.AnnKey(harness.WorkloadContainer, "limit"): harness.MemLimitMiB + "Mi",
 		})
 		env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
-		if env[harness.EnvGPUMemRequests] != want || env[harness.EnvGPUMemLimits] != want {
-			t.Errorf("limit-only: req=%q lim=%q, want both %q", env[harness.EnvGPUMemRequests], env[harness.EnvGPUMemLimits], want)
+		if env[harness.EnvGPUMemRequest] != want || env[harness.EnvGPUMemLimit] != want {
+			t.Errorf("limit-only: req=%q lim=%q, want both %q", env[harness.EnvGPUMemRequest], env[harness.EnvGPUMemLimit], want)
 		}
 	})
 }
@@ -290,7 +290,7 @@ func caseFailOpenSkips(ctx context.Context, t *testing.T) {
 			h.AnnKey(harness.WorkloadContainer, "request"): "not-a-quantity",
 		})
 		env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
-		for _, k := range []string{harness.EnvGPUMemRequests, harness.EnvGPUMemLimits, harness.EnvMPSPipeDir} {
+		for _, k := range []string{harness.EnvGPUMemRequest, harness.EnvGPUMemLimit, harness.EnvMPSPipeDir} {
 			if _, ok := env[k]; ok {
 				t.Errorf("fail-open with malformed annotation still injected %s=%q", k, env[k])
 			}
