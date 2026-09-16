@@ -83,10 +83,10 @@ func (c GPUMemoryConfig) IsEmpty() bool {
 // limit. This makes enforcement symmetric with the whole-GPU path:
 //
 //   - request only: the limit defaults to the request, so the memory cap
-//     (NVIDIA_GPU_MEMORY_LIMITS) is enforced at the requested size instead of
+//     (NVIDIA_GPU_MEMORY_LIMIT) is enforced at the requested size instead of
 //     being unbounded.
 //   - limit only: the request defaults to the limit, so the requested size
-//     (NVIDIA_GPU_MEMORY_REQUESTS, used for metrics/fraction accounting) is
+//     (NVIDIA_GPU_MEMORY_REQUEST, used for metrics/fraction accounting) is
 //     populated.
 //
 // A config with neither set (IsEmpty) is returned unchanged.

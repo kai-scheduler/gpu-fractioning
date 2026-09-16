@@ -9,6 +9,50 @@ import (
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
+// The injected names are a contract with consumers outside this repo — most
+// importantly the container toolkit's apply-cuda-memory-limits CDI hook, which
+// looks the GPU-memory keys up by exact string and does nothing at all when it
+// finds neither. Pinning the literals here is what turns a rename into a failing
+// test instead of into limits that quietly stop being enforced.
+func TestInjectedEnvNames(t *testing.T) {
+	want := map[string]string{
+		"EnvGPUMemoryRequest": "NVIDIA_GPU_MEMORY_REQUEST",
+		"EnvGPUMemoryLimit":   "NVIDIA_GPU_MEMORY_LIMIT",
+		"EnvMPSPipeDirectory": "CUDA_MPS_PIPE_DIRECTORY",
+		"EnvVisibleDevices":   "NVIDIA_VISIBLE_DEVICES",
+	}
+	got := map[string]string{
+		"EnvGPUMemoryRequest": EnvGPUMemoryRequest,
+		"EnvGPUMemoryLimit":   EnvGPUMemoryLimit,
+		"EnvMPSPipeDirectory": EnvMPSPipeDirectory,
+		"EnvVisibleDevices":   EnvVisibleDevices,
+	}
+	for name, wantValue := range want {
+		if got[name] != wantValue {
+			t.Errorf("%s = %q, want %q", name, got[name], wantValue)
+		}
+	}
+
+	// AllEnvKeys is what the audit ranges over to decide whether a running
+	// container was injected, so a key missing from it is a container the audit
+	// cannot see.
+	if len(AllEnvKeys) != len(want) {
+		t.Errorf("AllEnvKeys has %d entries, want %d: %v", len(AllEnvKeys), len(want), AllEnvKeys)
+	}
+	for _, key := range AllEnvKeys {
+		found := false
+		for _, wantValue := range want {
+			if key == wantValue {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("AllEnvKeys contains unexpected key %q", key)
+		}
+	}
+}
+
 // The want values below are spelled out as literals rather than built from the
 // configuration constants: these exact paths are the contract with mpsd (which
 // renders the shared server at <pipeDir>/shared/default) and with the container

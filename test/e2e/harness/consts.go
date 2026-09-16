@@ -30,9 +30,9 @@ const (
 	AnnotationPrefix = "nvidia.com/container."
 
 	// Env vars fractiond injects into a GPU-fractioning container (injection pkg).
-	EnvGPUMemRequests = "NVIDIA_GPU_MEMORY_REQUESTS"
-	EnvGPUMemLimits   = "NVIDIA_GPU_MEMORY_LIMITS"
-	EnvMPSPipeDir     = "CUDA_MPS_PIPE_DIRECTORY"
+	EnvGPUMemRequest = "NVIDIA_GPU_MEMORY_REQUEST"
+	EnvGPUMemLimit   = "NVIDIA_GPU_MEMORY_LIMIT"
+	EnvMPSPipeDir    = "CUDA_MPS_PIPE_DIRECTORY"
 	// EnvVisibleDevices is set from the scheduler's per-container device
 	// assignment (…gpus.devices) so a fractional pod sees exactly the GPU(s) the
 	// scheduler picked (injection.EnvVisibleDevices).

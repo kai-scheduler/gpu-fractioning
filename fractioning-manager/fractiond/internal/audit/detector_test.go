@@ -38,7 +38,7 @@ func TestDetectorViolations(t *testing.T) {
 			ctr: &api.Container{
 				Id: "c", Name: "trainer", PodSandboxId: "p",
 				State:  api.ContainerState_CONTAINER_RUNNING,
-				Env:    []string{injection.EnvGPUMemoryLimits + "=4096", injection.EnvGPUMemoryRequests + "=4096"},
+				Env:    []string{injection.EnvGPUMemoryLimit + "=4096", injection.EnvGPUMemoryRequest + "=4096"},
 				Mounts: []*api.Mount{mpsMount()},
 			},
 			wantMissing: []string{"env:" + injection.EnvMPSPipeDirectory},
@@ -60,10 +60,10 @@ func TestDetectorViolations(t *testing.T) {
 				Id: "c", Name: "trainer", PodSandboxId: "p",
 				State: api.ContainerState_CONTAINER_RUNNING,
 				// request env present (defaulted from the limit), limit env missing.
-				Env:    []string{injection.EnvMPSPipeDirectory + "=" + configuration.DefaultMPSPipeDirectory, injection.EnvGPUMemoryRequests + "=4096"},
+				Env:    []string{injection.EnvMPSPipeDirectory + "=" + configuration.DefaultMPSPipeDirectory, injection.EnvGPUMemoryRequest + "=4096"},
 				Mounts: []*api.Mount{mpsMount()},
 			},
-			wantMissing: []string{"env:" + injection.EnvGPUMemoryLimits},
+			wantMissing: []string{"env:" + injection.EnvGPUMemoryLimit},
 		},
 		{
 			name: "nothing injected reports every missing piece",
@@ -74,8 +74,8 @@ func TestDetectorViolations(t *testing.T) {
 			},
 			wantMissing: []string{
 				"env:" + injection.EnvMPSPipeDirectory,
-				"env:" + injection.EnvGPUMemoryLimits,
-				"env:" + injection.EnvGPUMemoryRequests,
+				"env:" + injection.EnvGPUMemoryLimit,
+				"env:" + injection.EnvGPUMemoryRequest,
 				defaultMountMissing,
 			},
 		},
@@ -89,7 +89,7 @@ func TestDetectorViolations(t *testing.T) {
 				Env:    []string{injection.EnvMPSPipeDirectory + "=" + configuration.DefaultMPSPipeDirectory},
 				Mounts: []*api.Mount{mpsMount()},
 			},
-			wantMissing: []string{"env:" + injection.EnvGPUMemoryLimits, "env:" + injection.EnvGPUMemoryRequests},
+			wantMissing: []string{"env:" + injection.EnvGPUMemoryLimit, "env:" + injection.EnvGPUMemoryRequest},
 		},
 		{
 			name: "missing NVIDIA_VISIBLE_DEVICES env (device assigned) is a violator",
@@ -131,8 +131,8 @@ func TestDetectorViolations(t *testing.T) {
 			},
 			wantMissing: []string{
 				"env:" + injection.EnvMPSPipeDirectory,
-				"env:" + injection.EnvGPUMemoryLimits,
-				"env:" + injection.EnvGPUMemoryRequests,
+				"env:" + injection.EnvGPUMemoryLimit,
+				"env:" + injection.EnvGPUMemoryRequest,
 				defaultMountMissing,
 			},
 		},
@@ -296,8 +296,8 @@ func TestDetectorFailOpenAuditsUnusableComputeMode(t *testing.T) {
 			// the fallback rather than merely that something was reported.
 			assertSameSet(t, got[0].missing, []string{
 				"env:" + injection.EnvMPSPipeDirectory,
-				"env:" + injection.EnvGPUMemoryLimits,
-				"env:" + injection.EnvGPUMemoryRequests,
+				"env:" + injection.EnvGPUMemoryLimit,
+				"env:" + injection.EnvGPUMemoryRequest,
 				defaultMountMissing,
 			})
 		})
@@ -389,10 +389,10 @@ func withComputeMode(pod *api.PodSandbox, containerName, value string) *api.PodS
 func injectedEnv(limit, request bool) []string {
 	env := []string{injection.EnvMPSPipeDirectory + "=" + configuration.DefaultMPSPipeDirectory}
 	if limit {
-		env = append(env, injection.EnvGPUMemoryLimits+"=4096")
+		env = append(env, injection.EnvGPUMemoryLimit+"=4096")
 	}
 	if request {
-		env = append(env, injection.EnvGPUMemoryRequests+"=2048")
+		env = append(env, injection.EnvGPUMemoryRequest+"=2048")
 	}
 	return env
 }
@@ -405,8 +405,8 @@ func injectedEnv(limit, request bool) []string {
 func injectedEqualEnv() []string {
 	return []string{
 		injection.EnvMPSPipeDirectory + "=" + configuration.DefaultMPSPipeDirectory,
-		injection.EnvGPUMemoryLimits + "=4096",
-		injection.EnvGPUMemoryRequests + "=4096",
+		injection.EnvGPUMemoryLimit + "=4096",
+		injection.EnvGPUMemoryRequest + "=4096",
 	}
 }
 
@@ -446,8 +446,8 @@ func sharedSocketMount() *api.Mount {
 func sharedSocketEqualEnv() []string {
 	return []string{
 		injection.EnvMPSPipeDirectory + "=" + configuration.ContainerMPSPipeDirectory,
-		injection.EnvGPUMemoryLimits + "=4096",
-		injection.EnvGPUMemoryRequests + "=4096",
+		injection.EnvGPUMemoryLimit + "=4096",
+		injection.EnvGPUMemoryRequest + "=4096",
 	}
 }
 
