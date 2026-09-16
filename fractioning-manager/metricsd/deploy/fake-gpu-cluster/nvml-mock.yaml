@@ -141,7 +141,6 @@ spec:
         app: nvml-mock
     spec:
       serviceAccountName: nvml-mock
-      hostPID: true
       terminationGracePeriodSeconds: 10
       nodeSelector:
         nvidia.com/gpu.present: "true"
@@ -157,12 +156,24 @@ spec:
           # Bump it deliberately, together with the command paths below.
           image: ghcr.io/nvidia/nvml-mock@sha256:2718efebb1695121f0d3f1a4325a22050a2e95362d98f4f3abe9f70dd7316e9c
           imagePullPolicy: IfNotPresent
+          # Unlike fractiond and mpsd, this container needs no host privileges.
+          # Its setup.sh only mkdir/rm's under the hostPath mounts below and runs
+          # `kubectl label node` (covered by the ClusterRole above); it opens no
+          # devices and creates no device nodes. It therefore runs as root — the
+          # hostPath trees are root-owned — with every capability dropped, which
+          # is enough for plain DAC-permitted writes.
           securityContext:
-            privileged: true
+            privileged: false
+            allowPrivilegeEscalation: false
+            runAsUser: 0
+            capabilities:
+              drop:
+                - ALL
           # The mock only copies a shared library onto the host and idles, so the
           # requests are deliberately tiny — they exist so the pod is accounted
-          # for rather than best-effort. Memory is capped; CPU is not, to match
-          # the other node daemons.
+          # for rather than best-effort. Unlike the production daemons, this one
+          # is disposable test infrastructure, so memory and ephemeral storage
+          # are both capped: evicting it costs nothing. CPU stays uncapped.
           resources:
             requests:
               cpu: 10m
@@ -170,6 +181,7 @@ spec:
               ephemeral-storage: 100Mi
             limits:
               memory: 128Mi
+              ephemeral-storage: 1Gi
           command: ["/scripts/entrypoint.sh"]
           env:
             - name: GPU_COUNT
