@@ -122,14 +122,44 @@ spec:
                         drain. Expiry never blocks the container stop. Default: 15s.
                       type: string
                     resources:
-                      description: >-
-                        resources overrides the compute resources of the fractiond
-                        container, merged over the built-in defaults.
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
                       type: object
-                      x-kubernetes-preserve-unknown-fields: true
                       x-kubernetes-validations:
-                        - rule: "!has(self.claims) || size(self.claims) == 0"
-                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+                      - message: 'resources.claims is not supported: the operator builds the daemon pod spec and never populates
+                          spec.resourceClaims, so a claim entry could not resolve'
+                        rule: '!has(self.claims) || size(self.claims) == 0'
+                      description: resources overrides the compute resources of the fractiond container, merged over the built-in
+                        defaults.
                 metricsAgent:
                   description: >-
                     metricsAgent configures the GPU metrics exporter (metricsd),
@@ -183,14 +213,44 @@ spec:
                         gpuSmUtilizationPercentNormalized:
                           type: string
                     resources:
-                      description: >-
-                        resources overrides the compute resources of the metricsd
-                        container, merged over the built-in defaults.
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
                       type: object
-                      x-kubernetes-preserve-unknown-fields: true
                       x-kubernetes-validations:
-                        - rule: "!has(self.claims) || size(self.claims) == 0"
-                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+                      - message: 'resources.claims is not supported: the operator builds the daemon pod spec and never populates
+                          spec.resourceClaims, so a claim entry could not resolve'
+                        rule: '!has(self.claims) || size(self.claims) == 0'
+                      description: resources overrides the compute resources of the metricsd container, merged over the built-in
+                        defaults.
                 mpsDaemon:
                   description: mpsDaemon configures the MPS daemon supervisor (mpsd).
                   type: object
@@ -226,16 +286,45 @@ spec:
                         server and escalates to a restart. Default: 30s.
                       type: string
                     resources:
-                      description: >-
-                        resources overrides the compute resources of the mpsd
-                        container, merged over the built-in defaults. The default is
-                        sized for up to 8 GPUs per node (one MPS server context per
-                        GPU, ~50 MiB of host memory each).
+                      properties:
+                        claims:
+                          items:
+                            properties:
+                              name:
+                                type: string
+                              request:
+                                type: string
+                            required:
+                            - name
+                            type: object
+                          type: array
+                          x-kubernetes-list-map-keys:
+                          - name
+                          x-kubernetes-list-type: map
+                        limits:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
+                        requests:
+                          additionalProperties:
+                            anyOf:
+                            - type: integer
+                            - type: string
+                            pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                            x-kubernetes-int-or-string: true
+                          type: object
                       type: object
-                      x-kubernetes-preserve-unknown-fields: true
                       x-kubernetes-validations:
-                        - rule: "!has(self.claims) || size(self.claims) == 0"
-                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+                      - message: 'resources.claims is not supported: the operator builds the daemon pod spec and never populates
+                          spec.resourceClaims, so a claim entry could not resolve'
+                        rule: '!has(self.claims) || size(self.claims) == 0'
+                      description: resources overrides the compute resources of the mpsd container, merged over the built-in
+                        defaults. The default is sized for up to 8 GPUs per node (one MPS server context per GPU, ~50 MiB
+                        of host memory each).
             status:
               description: status defines the observed state of GpuFractioningConfig
               type: object
