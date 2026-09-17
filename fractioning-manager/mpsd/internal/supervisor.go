@@ -5,13 +5,18 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
+
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/procfs"
 )
 
 const (
@@ -28,6 +33,18 @@ const (
 	DefaultGracefulStopDelay = 60 * time.Second // time to wait after "quit" before SIGKILL
 
 	DefaultMPSControlPort = "3" // protocol version 3
+
+	// mpsServerExecutable is the executable name of the per-GPU MPS servers the
+	// control daemon spawns. A hard restart kills them explicitly: they are what
+	// holds the GPU state, and one that outlives its control daemon keeps
+	// whatever fault wedged it. Matched against the process's executable rather
+	// than its comm, which the kernel truncates to 15 characters — see
+	// procfs.PIDsByExecutable.
+	mpsServerExecutable = "nvidia-cuda-mps-server"
+	// intentionalRestartDelay is the pause before bringing MPS back after a
+	// restart we asked for. It only has to cover socket teardown — unlike a
+	// crash, there is no failure to back off from.
+	intentionalRestartDelay = time.Second
 
 	DefaultMPSConfigPath = "/etc/nvidia-mps/mps-control.toml" // default path for the MPS config file
 	// Fixed MPS feature toggles. memacct and context-share are always on; only
@@ -66,6 +83,13 @@ type SupervisorConfig struct {
 	GracefulStopDelay time.Duration // time to wait after "quit" before SIGKILL
 	Stdout            io.Writer     // subprocess stdout; nil defaults to os.Stdout
 	Stderr            io.Writer     // subprocess stderr; nil defaults to os.Stderr
+
+	// ProcRoot is the procfs mount used to find stray MPS servers during a hard
+	// restart. Empty defaults to /proc.
+	ProcRoot string
+	// KillProcess sends SIGKILL to a pid. Empty defaults to the real syscall;
+	// tests substitute a recorder.
+	KillProcess func(pid int) error
 }
 
 // Supervisor manages the nvidia-cuda-mps-control process lifecycle.
@@ -74,6 +98,34 @@ type SupervisorConfig struct {
 type Supervisor struct {
 	cfg    SupervisorConfig
 	logger *slog.Logger
+
+	// mu guards the running process handle and the pending restart request, both
+	// written by Restart (called from the drain server's goroutines) and read by
+	// the Run loop.
+	mu sync.Mutex
+	// current is the MPS process the loop is currently supervising, or nil
+	// between runs.
+	current *runningMPS
+	// restartRequested and restartReason are set by Restart and consumed by the
+	// loop, so a restart we asked for is not logged and backed off as if the
+	// daemon had crashed. The flag is separate from the reason because an empty
+	// reason is still a request: inferring it from a non-empty string would make
+	// Restart("", ...) count against the retry budget and eventually take mpsd
+	// down for doing what it was told.
+	restartRequested bool
+	restartReason    string
+}
+
+// runningMPS is the handle Restart needs on the supervised process: the
+// process itself, and the stdin the control daemon reads commands from.
+type runningMPS struct {
+	cmd   *exec.Cmd
+	stdin io.Writer
+	// done is closed when the run ends, so a graceful restart's escalation
+	// watchdog stops waiting the moment the daemon actually quits. Without it
+	// each recycle leaves a goroutine asleep for the whole graceful stop delay,
+	// and mpsd recycles after every drained workload.
+	done chan struct{}
 }
 
 // NewSupervisor creates a new Supervisor. Nil Stdout/Stderr default to os.Stdout/os.Stderr.
@@ -83,6 +135,12 @@ func NewSupervisor(cfg SupervisorConfig, logger *slog.Logger) *Supervisor {
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
+	}
+	if cfg.ProcRoot == "" {
+		cfg.ProcRoot = procfs.DefaultRoot
+	}
+	if cfg.KillProcess == nil {
+		cfg.KillProcess = killProcess
 	}
 	return &Supervisor{cfg: cfg, logger: logger}
 }
@@ -114,6 +172,23 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		}
 
 		uptime := time.Since(startTime)
+
+		// A restart we asked for is not a failure: it must not consume the retry
+		// budget, grow the backoff, or be logged as a crash. Recycling MPS after
+		// every drained workload is a routine event, and on a busy node it would
+		// otherwise exhaust MaxRetries and take mpsd down.
+		if reason, requested := s.takeRestartRequest(); requested {
+			s.logger.Info("MPS daemon restarted on request", "reason", reason, "uptime", uptime)
+			attempt = 0
+			backoff = s.cfg.Backoff
+			s.removeStaleSocket()
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(intentionalRestartDelay):
+			}
+			continue
+		}
 
 		if err != nil {
 			s.logger.Warn("MPS daemon exited with error, restarting",
@@ -274,8 +349,147 @@ func (s *Supervisor) runMPS(ctx context.Context) error {
 		"configPath", s.cfg.ConfigPath,
 	)
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting MPS daemon: %w", err)
+	}
+
+	// Publish the handle only once the process exists, and retract it before
+	// returning, so Restart can never act on a process that has already exited.
+	running := &runningMPS{cmd: cmd, stdin: stdinPipe, done: make(chan struct{})}
+	s.setCurrent(running)
+	defer func() {
+		s.setCurrent(nil)
+		close(running.done)
+	}()
+
+	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("MPS daemon process: %w", err)
+	}
+	return nil
+}
+
+// Restart stops the running MPS control daemon so the supervisor's own loop
+// brings a fresh one up. It is the recovery half of the MPS wedge problem: a
+// server that lost a client mid-kernel holds a fault that hangs every client
+// that connects afterwards, and restarting MPS is the only way to clear it.
+//
+// graceful asks the daemon to quit through its own command interface, which
+// drains and shuts down MPS servers cleanly. Use it when nothing is attached —
+// with a client still running a kernel, the quit blocks, which is why it
+// escalates to a kill after the configured graceful stop delay.
+//
+// A non-graceful restart kills the daemon outright and then kills any MPS
+// server left behind. The servers are the processes actually holding the wedged
+// GPU state, and they can outlive the control daemon, so leaving them running
+// would mean "restarting" MPS without fixing anything.
+//
+// It returns an error only when there is no daemon to restart; the restart
+// itself completes asynchronously in the Run loop.
+func (s *Supervisor) Restart(reason string, graceful bool) error {
+	s.mu.Lock()
+	current := s.current
+	if current != nil {
+		s.restartRequested = true
+		s.restartReason = reason
+	}
+	s.mu.Unlock()
+
+	if current == nil {
+		return fmt.Errorf("cannot restart: MPS daemon is not running")
+	}
+
+	s.logger.Info("restarting MPS daemon", "reason", reason, "graceful", graceful)
+
+	if !graceful {
+		s.hardStop(current)
+		return nil
+	}
+
+	if _, err := fmt.Fprintln(current.stdin, "quit"); err != nil {
+		s.logger.Warn("failed to send quit to MPS daemon, killing instead", "error", err)
+		s.hardStop(current)
+		return nil
+	}
+
+	// Escalate if the quit does not take. Nothing else would: the Run loop is
+	// blocked in Wait, and the process-level WaitDelay only applies to a
+	// context cancellation, which this is not.
+	go func() {
+		timer := time.NewTimer(s.cfg.GracefulStopDelay)
+		defer timer.Stop()
+		select {
+		case <-current.done:
+			// Quit accepted; nothing to escalate.
+			return
+		case <-timer.C:
+		}
+		if s.isCurrent(current) {
+			s.logger.Warn("MPS daemon did not quit within the graceful stop delay, killing",
+				"reason", reason, "gracefulStopDelay", s.cfg.GracefulStopDelay)
+			s.hardStop(current)
+		}
+	}()
+
+	return nil
+}
+
+// hardStop kills the control daemon and every MPS server still running.
+func (s *Supervisor) hardStop(current *runningMPS) {
+	if current.cmd.Process != nil {
+		if err := current.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			s.logger.Warn("failed to kill MPS daemon", "error", err)
+		}
+	}
+	s.killStrayServers()
+}
+
+// killStrayServers kills any nvidia-cuda-mps-server process on the node. mpsd
+// runs in the host PID namespace, so they are visible in its own /proc.
+func (s *Supervisor) killStrayServers() {
+	pids, err := procfs.PIDsByExecutable(s.cfg.ProcRoot, mpsServerExecutable)
+	if err != nil {
+		s.logger.Warn("failed to scan for MPS server processes", "error", err)
+		return
+	}
+	for _, pid := range pids {
+		if err := s.cfg.KillProcess(pid); err != nil {
+			s.logger.Warn("failed to kill MPS server process", "pid", pid, "error", err)
+			continue
+		}
+		s.logger.Info("killed MPS server process", "pid", pid)
+	}
+}
+
+func (s *Supervisor) setCurrent(current *runningMPS) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.current = current
+}
+
+func (s *Supervisor) isCurrent(current *runningMPS) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.current == current
+}
+
+// takeRestartRequest reports whether the run that just ended was stopped by
+// Restart, clearing the request as it does.
+func (s *Supervisor) takeRestartRequest() (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reason, requested := s.restartReason, s.restartRequested
+	s.restartReason, s.restartRequested = "", false
+	return reason, requested
+}
+
+// killProcess is the production KillProcess: SIGKILL, treating an already-dead
+// process as success.
+func killProcess(pid int) error {
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
 	}
 	return nil
 }

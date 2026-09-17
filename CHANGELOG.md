@@ -7,6 +7,73 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- GPU **compute** limits, not just memory limits. A container whose pod carries
+  the new per-container annotation
+  `nvidia.com/container.<container-name>.gpu-compute.portion` (a GPU portion in
+  `(0, 1]`, written by the scheduler at bind time from the portion it charged
+  the workload's quota for) now has `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` injected
+  alongside its memory limits, so MPS caps its SM occupancy to match. Without
+  it, `sm-sharing` let two containers occupy the SMs concurrently but put no
+  ceiling on either: a container holding half a GPU's memory could still take
+  all of its compute. The cap applies in both compute modes — under
+  `time-slicing` it bounds the container's own MPS server, under `sm-sharing`
+  its share of the shared one. Absent annotation means no cap, the pre-existing
+  behaviour.
+- Memory limits are now also enforced by MPS itself, via a
+  `CUDA_MPS_PINNED_DEVICE_MEM_LIMIT` injected per assigned GPU. This
+  deliberately duplicates the cap `NVIDIA_GPU_MEMORY_LIMIT` asks the container
+  toolkit's `apply-cuda-memory-limits` CDI hook to apply, because the two have
+  different prerequisites: the hook needs GPU Operator v26.7.1+, this needs only
+  MPS. Clusters with one but not the other still get exactly one enforced limit;
+  clusters with both set the same value twice.
+- The limit-carrying env vars are now removed before being injected, so a
+  container that ships its own `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` or
+  `NVIDIA_GPU_MEMORY_*` cannot keep it. Previously a workload could have set
+  them itself and opted out of its own caps.
+- Automatic MPS client draining before a fractional container is stopped, and
+  MPS recycling once a node goes idle — a workaround for the MPS wedge
+  documented by NVIDIA for CUDA 13.5 and earlier. An MPS client killed with GPU
+  work in flight orphans that work; every other client on the same GPU then
+  fails with `cudaErrorIllegalAddress`, and if nothing consumes the resulting
+  fault, every client that connects afterwards hangs forever inside CUDA init
+  while the control plane reports healthy throughout. Only an MPS restart clears
+  it. fractiond's NRI `StopContainer` hook now calls a new mpsd endpoint while
+  the container is still alive, and mpsd terminates its MPS clients through the
+  control daemon — NVIDIA's supported workaround, which drains outstanding work
+  first — with no preStop hook or workload cooperation required. The hook waits
+  only briefly (clamped to half the request timeout the NRI runtime negotiated,
+  because overrunning it is fatal and closes the plugin) and mpsd completes the
+  drain in the background. A terminate
+  that does not return is taken as evidence the server is already wedged and
+  escalates to a hard MPS restart that also kills any MPS server left behind.
+  When a drain leaves no clients attached, mpsd recycles MPS (`mpsDaemon.recycleWhenIdle`,
+  on by default): nothing is attached, so the restart is free, and a fault
+  picked up during one run of a benchmark sweep cannot survive into the next.
+  Drain failures never block a container stop.
+- Per-daemon `resources` overrides on the CR
+  (`spec.fractioningAgent.resources`, `spec.metricsAgent.resources`,
+  `spec.mpsDaemon.resources`), merged over the built-in defaults so raising one
+  limit does not drop the requests the pods' QoS class depends on. Previously
+  the only way to change a daemon's resources was to patch the DaemonSet
+  directly, which the controller then reconciled away.
+- The minimum NVIDIA GPU Operator version is now configurable
+  (`gpuOperator.minimumVersion`, default `v26.7.1`; `""` skips the check). What
+  v26.7.1 brings is the container toolkit carrying the CDI memory-limit hook;
+  with MPS-enforced limits now injected as well, a cluster on an older GPU
+  Operator can run with MPS-only enforcement instead of being blocked.
+- `make crd-validations-check` fails when the chart's CRD and the
+  controller-gen CRD disagree on their CEL validation rules. The chart ships a
+  deliberately trimmed copy of the CRD and that copy is what installs, so a rule
+  added through a kubebuilder marker and not mirrored there is enforced on no
+  real cluster — with both files individually valid, nothing else in the build
+  noticed.
+- The operator now sets the `gpu-fractioning.nvidia.com/Ready` node condition to
+  `Unknown` on every targeted node as it shuts down
+  (`markNodesUnknownOnShutdown`, on by default; only the replica that held
+  leadership does it). Nothing else expires that condition, so scaling the
+  operator to zero previously froze every node's readiness at whatever it last
+  said, and a scheduler gating fractional placement on it kept placing pods on
+  nodes whose daemon health nobody was watching.
 - CNCF project-repository requirements, ahead of making the repository public in
   the `kai-scheduler` organization: `GOVERNANCE.md` (this repository's own
   governance — its maintainers, decision making, and how that group changes),
@@ -63,6 +130,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The minimum supported NVIDIA GPU Operator version is now **v26.7.1** (was v26.7.0). A cluster running v26.7.0 is reported as unsupported on the `GpuFractioningConfig` `Ready` condition and the node-level daemons are not rolled out. Note that a ClusterPolicy labelled only `26.7` normalizes to `v26.7.0` and is therefore also rejected; label it with the full patch version.
 
 ### Fixed
+- mpsd could not start on a node with more than about five GPUs. Its container
+  memory limit was hardcoded at 256Mi, but the MPS control daemon holds a CUDA
+  server context per GPU at roughly 50 MiB of host memory each, so the sixth
+  context ran the pod out of memory. The failure was badly misleading: the CUDA
+  allocation failed before the kernel could OOM-kill anything, so the pod exited
+  1 with `CUDA_ERROR_OUT_OF_MEMORY` — reading as a GPU memory problem — while
+  every GPU on the node sat idle at 1 MiB used. The default is now 1Gi (enough
+  for a 16-GPU node) and is overridable via `spec.mpsDaemon.resources`.
+- Helm values for the daemon stanzas now actually reach the
+  `GpuFractioningConfig`. The default-CR template enumerated a handful of fields,
+  so `--set fractioningAgent.nriSocketPath=...` was accepted by Helm and then
+  silently dropped — on exactly the distributions (microk8s, k3s, RKE2) whose
+  non-default NRI and CRI socket paths make that field necessary. All three
+  stanzas (`fractioningAgent`, `metricsAgent`, `mpsDaemon`) are now passed
+  through verbatim, so every CRD field is reachable from values.
 - fractiond now injects the GPU-memory limits under the names their consumer actually reads: `NVIDIA_GPU_MEMORY_REQUEST` and `NVIDIA_GPU_MEMORY_LIMIT`, singular where they were previously plural. The NVIDIA container toolkit's `apply-cuda-memory-limits` CDI hook looks both up by exact name and returns early when it finds neither, so under the plural spelling an injected limit was never applied and the container's GPU memory went unfenced. The values are unchanged (whole MiB). The retroactive-enforcement audit looks for the new names as well, so it does not mistake a correctly injected container for one that slipped through.
 - The mpsd pod now runs with `hostPID: true`, without which MPS memory accounting could not register any client and GPU memory limits went unenforced. The MPS control daemon identifies a client by the PID in its socket's peer credentials, and the kernel only translates that PID for the daemon's own PID namespace or a descendant of it; from inside its own pod namespace mpsd therefore saw every workload container as pid 0, logged `[memacct] failed to register client pid 0`, and attributed memory-accounting events to `target=unknown`. The host PID namespace is an ancestor of every container's, so PIDs and their cgroups now resolve. Workloads require no change.
 - fractiond now defaults a missing GPU-memory request or limit from the other (so `request == limit`). A container that annotates only `.request` now also gets `NVIDIA_GPU_MEMORY_LIMIT` injected (enforced at the requested size instead of being unbounded), and a container that annotates only `.limit` gets `NVIDIA_GPU_MEMORY_REQUEST` populated. The retroactive-enforcement audit applies the same defaulting.

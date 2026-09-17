@@ -404,3 +404,297 @@ func TestApplyDefaults(t *testing.T) {
 		})
 	}
 }
+
+const computePortionTestKey = "nvidia.com/container.trainer.gpu-compute.portion"
+
+// TestParseComputePortion is the first half of the SM-occupancy cap: whatever
+// this returns becomes CUDA_MPS_ACTIVE_THREAD_PERCENTAGE inside a container
+// that shares a GPU with other tenants. Two failure shapes matter more than the
+// happy path:
+//
+//   - a value that is silently accepted when it should not be (a percentage
+//     pasted where a portion belongs, a negative, a zero) hands the container a
+//     cap that is meaningless or, worse, that MPS reads as "no limit";
+//   - a value that rounds to 0% — MPS treats 0 as unlimited, so the smallest
+//     requests would become the least restricted ones. Hence the floor at 1%.
+func TestParseComputePortion(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		wantPercent int
+		wantFound   bool
+		wantErr     bool
+	}{
+		{
+			// Absence is the pre-existing world: memory was capped, compute was
+			// not. It must stay a clean "nothing to enforce", never an error
+			// that would block every pod the scheduler has not yet annotated.
+			name:        "absent annotation is not found and not an error",
+			annotations: map[string]string{"other": "value"},
+		},
+		{
+			name:        "nil annotations is not found and not an error",
+			annotations: nil,
+		},
+		{
+			name:        "half a GPU",
+			annotations: map[string]string{computePortionTestKey: "0.5"},
+			wantPercent: 50,
+			wantFound:   true,
+		},
+		{
+			name:        "whole GPU",
+			annotations: map[string]string{computePortionTestKey: "1"},
+			wantPercent: 100,
+			wantFound:   true,
+		},
+		{
+			name:        "whole GPU written as 1.0",
+			annotations: map[string]string{computePortionTestKey: "1.0"},
+			wantPercent: 100,
+			wantFound:   true,
+		},
+		{
+			// MPS only accepts whole percents, so a third of a GPU has to round
+			// somewhere. Rounding down (33, not 34) keeps the sum of three such
+			// containers at or under 100% of the card.
+			name:        "one third rounds to nearest whole percent",
+			annotations: map[string]string{computePortionTestKey: "0.333"},
+			wantPercent: 33,
+			wantFound:   true,
+		},
+		{
+			name:        "rounds up to nearest whole percent",
+			annotations: map[string]string{computePortionTestKey: "0.336"},
+			wantPercent: 34,
+			wantFound:   true,
+		},
+		{
+			// 0.5% and 0.49% both land on or below the rounding boundary; either
+			// way the answer must be 1, not 0. A 0 here would be injected as
+			// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE=0, which MPS reads as unlimited
+			// — a tiny request would become an uncapped one.
+			name:        "half a percent floors at 1%, never 0%",
+			annotations: map[string]string{computePortionTestKey: "0.005"},
+			wantPercent: 1,
+			wantFound:   true,
+		},
+		{
+			name:        "just under half a percent floors at 1%, never 0%",
+			annotations: map[string]string{computePortionTestKey: "0.0049"},
+			wantPercent: 1,
+			wantFound:   true,
+		},
+		{
+			name:        "vanishingly small portion still floors at 1%",
+			annotations: map[string]string{computePortionTestKey: "0.0000001"},
+			wantPercent: 1,
+			wantFound:   true,
+		},
+		{
+			// Scientific notation parses as a number, so it must be handled by
+			// the range/floor rules rather than rejected as a typo.
+			name:        "scientific notation floors at 1%",
+			annotations: map[string]string{computePortionTestKey: "1e-3"},
+			wantPercent: 1,
+			wantFound:   true,
+		},
+		{
+			name:        "scientific notation in range",
+			annotations: map[string]string{computePortionTestKey: "5e-1"},
+			wantPercent: 50,
+			wantFound:   true,
+		},
+		{
+			// THE bypass to guard: someone writes the percentage instead of the
+			// portion. Accepting it would mean percent = 5000, i.e. a container
+			// asking for half a GPU is handed a cap 50x the card. It must be an
+			// error, not a silent pass-through.
+			name:        "a percentage where a portion belongs is rejected",
+			annotations: map[string]string{computePortionTestKey: "50"},
+			wantErr:     true,
+		},
+		{
+			name:        "100 (percent) is rejected, not read as 100 GPUs",
+			annotations: map[string]string{computePortionTestKey: "100"},
+			wantErr:     true,
+		},
+		{
+			name:        "anything above one whole GPU is rejected",
+			annotations: map[string]string{computePortionTestKey: "1.5"},
+			wantErr:     true,
+		},
+		{
+			// Guards the boundary itself: the range is (0, 1], so the smallest
+			// representable step past 1 must already fail.
+			name:        "barely above one whole GPU is rejected",
+			annotations: map[string]string{computePortionTestKey: "1.0000001"},
+			wantErr:     true,
+		},
+		{
+			// Zero would be injected as 0%, which MPS reads as "no limit" — the
+			// exact opposite of what "zero compute" asks for.
+			name:        "zero is rejected",
+			annotations: map[string]string{computePortionTestKey: "0"},
+			wantErr:     true,
+		},
+		{
+			name:        "zero written as 0.0 is rejected",
+			annotations: map[string]string{computePortionTestKey: "0.0"},
+			wantErr:     true,
+		},
+		{
+			name:        "negative portion is rejected",
+			annotations: map[string]string{computePortionTestKey: "-0.5"},
+			wantErr:     true,
+		},
+		{
+			name:        "negative zero is rejected",
+			annotations: map[string]string{computePortionTestKey: "-0"},
+			wantErr:     true,
+		},
+		{
+			// Present but blank is a value, not an absence: the scheduler wrote
+			// the key, so falling back to "uncapped" would hide a scheduler bug
+			// behind a running, unlimited container.
+			name:        "present but blank is an error, not an absence",
+			annotations: map[string]string{computePortionTestKey: ""},
+			wantErr:     true,
+		},
+		{
+			name:        "whitespace-only is an error, not an absence",
+			annotations: map[string]string{computePortionTestKey: "   "},
+			wantErr:     true,
+		},
+		{
+			name:        "surrounding whitespace is trimmed",
+			annotations: map[string]string{computePortionTestKey: "  0.5\t"},
+			wantPercent: 50,
+			wantFound:   true,
+		},
+		{
+			name:        "non-numeric is rejected",
+			annotations: map[string]string{computePortionTestKey: "abc"},
+			wantErr:     true,
+		},
+		{
+			name:        "a portion with a percent sign is rejected",
+			annotations: map[string]string{computePortionTestKey: "50%"},
+			wantErr:     true,
+		},
+		{
+			name:        "a k8s-style quantity is rejected",
+			annotations: map[string]string{computePortionTestKey: "500m"},
+			wantErr:     true,
+		},
+		{
+			// strconv.ParseFloat accepts "NaN" and "Inf". NaN fails every
+			// comparison, so a range check written as "portion <= 0" instead of
+			// "!(portion > 0)" would let it through and produce a garbage
+			// percentage from math.Round(NaN).
+			name:        "NaN is rejected",
+			annotations: map[string]string{computePortionTestKey: "NaN"},
+			wantErr:     true,
+		},
+		{
+			name:        "lowercase nan is rejected",
+			annotations: map[string]string{computePortionTestKey: "nan"},
+			wantErr:     true,
+		},
+		{
+			name:        "positive infinity is rejected",
+			annotations: map[string]string{computePortionTestKey: "Inf"},
+			wantErr:     true,
+		},
+		{
+			name:        "spelled-out infinity is rejected",
+			annotations: map[string]string{computePortionTestKey: "+Infinity"},
+			wantErr:     true,
+		},
+		{
+			name:        "negative infinity is rejected",
+			annotations: map[string]string{computePortionTestKey: "-Inf"},
+			wantErr:     true,
+		},
+		{
+			// Another container's cap must never be applied to this one: the
+			// annotation key is per-container, and a prefix/name mix-up would
+			// hand a sidecar the trainer's SM budget.
+			name: "a sibling container's portion does not leak",
+			annotations: map[string]string{
+				"nvidia.com/container.sidecar.gpu-compute.portion": "0.5",
+			},
+		},
+		{
+			// A container name that is a prefix of another's must not match by
+			// accident (train vs trainer).
+			name: "a longer container name is not a prefix match",
+			annotations: map[string]string{
+				"nvidia.com/container.trainer-2.gpu-compute.portion": "0.5",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			percent, found, err := ParseComputePortion(tt.annotations, "trainer", configuration.DefaultAnnotationPrefix)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseComputePortion() = (%d, %v, nil), expected an error", percent, found)
+				}
+				// An error must never come back as "found": a caller that logs
+				// the error and carries on (fail-open) reads found to decide
+				// whether to inject a cap, and a true here would inject
+				// whatever garbage percent came with it.
+				if found {
+					t.Errorf("ParseComputePortion() returned found=true alongside an error: %v", err)
+				}
+				if percent != 0 {
+					t.Errorf("ParseComputePortion() returned percent=%d alongside an error, want 0", percent)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("ParseComputePortion() unexpected error: %v", err)
+			}
+			if found != tt.wantFound {
+				t.Errorf("ParseComputePortion() found = %v, want %v", found, tt.wantFound)
+			}
+			if percent != tt.wantPercent {
+				t.Errorf("ParseComputePortion() percent = %d, want %d", percent, tt.wantPercent)
+			}
+			// A cap of 0 is "unlimited" to MPS, and anything above 100 is not a
+			// thing. Belt and braces around every accepted value in the table.
+			if found && (percent < 1 || percent > 100) {
+				t.Errorf("ParseComputePortion() percent = %d, outside the usable MPS range [1, 100]", percent)
+			}
+		})
+	}
+}
+
+// TestParseComputePortionHonorsPrefix guards the configurable annotation
+// prefix: fractiond and the scheduler agree on it through configuration, and a
+// portion written under a different prefix must read as absent rather than as
+// an uncapped container that looks annotated.
+func TestParseComputePortionHonorsPrefix(t *testing.T) {
+	ann := map[string]string{"example.com/container.trainer.gpu-compute.portion": "0.25"}
+
+	if percent, found, err := ParseComputePortion(ann, "trainer", "example.com/container."); err != nil || !found || percent != 25 {
+		t.Errorf("with matching prefix = (%d, %v, %v), want (25, true, nil)", percent, found, err)
+	}
+	if percent, found, err := ParseComputePortion(ann, "trainer", configuration.DefaultAnnotationPrefix); err != nil || found || percent != 0 {
+		t.Errorf("with the default prefix = (%d, %v, %v), want (0, false, nil)", percent, found, err)
+	}
+}
+
+// TestComputePortionAnnotationKey pins the key fractiond reads against the one
+// the scheduler writes. They are built in different repos, so the literal is
+// the contract: a rename on this side turns every annotated pod into an
+// unannotated one, i.e. silently uncapped compute.
+func TestComputePortionAnnotationKey(t *testing.T) {
+	if got := ComputePortionAnnotationKey(configuration.DefaultAnnotationPrefix, "trainer"); got != computePortionTestKey {
+		t.Errorf("ComputePortionAnnotationKey() = %q, want %q", got, computePortionTestKey)
+	}
+}

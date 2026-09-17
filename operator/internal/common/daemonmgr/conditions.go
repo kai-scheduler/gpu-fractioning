@@ -92,6 +92,13 @@ func PatchNodeCondition(ctx context.Context, reader client.Reader, writer client
 	if err := writer.Status().Patch(ctx, patchNode, client.RawPatch(
 		types.StrategicMergePatchType, patchBytes,
 	)); err != nil {
+		// A node that no longer exists has nothing left to assert, so this is
+		// success rather than failure — matching RemoveNodeCondition. It is a
+		// normal race during a cluster upgrade, when nodes are being replaced
+		// at the same time as the sweep that would mark them.
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("patching node %s condition: %w", nodeName, err)
 	}
 
@@ -128,6 +135,70 @@ func RemoveNodeCondition(ctx context.Context, writer client.Client, nodeName str
 
 	log.V(1).Info("removed node condition", "condition", NodeConditionType)
 	return nil
+}
+
+// MarkNodeConditionsUnknown flips the gpu-fractioning.nvidia.com/Ready condition
+// to Unknown on every node matching nodeSelector that currently carries it.
+//
+// It is called when the controller is shutting down. The condition is a
+// controller-maintained liveness statement about a node's daemons, but nothing
+// expires it: scale the operator to zero (or have it crash-loop) and every node
+// keeps advertising whatever it last said, indefinitely. A scheduler that gates
+// fractional placement on the condition — KAI does — then keeps placing pods on
+// nodes nobody is watching. Marking Unknown on the way out makes the gap
+// visible and fails in the safe direction; a restarting controller patches the
+// nodes back to True on its first reconcile.
+//
+// Nodes that never carried the condition are left untouched, so this can never
+// introduce a condition on an unrelated node. Per-node failures are joined
+// rather than aborting the sweep — this runs in a shutdown window, so doing as
+// much as possible before the deadline matters more than stopping at the first
+// error.
+func MarkNodeConditionsUnknown(ctx context.Context, reader client.Reader, writer client.Client, nodeSelector map[string]string) error {
+	log := logf.FromContext(ctx)
+
+	condition := corev1.NodeCondition{
+		Type:    corev1.NodeConditionType(NodeConditionType),
+		Status:  corev1.ConditionUnknown,
+		Reason:  ReasonControllerUnavailable,
+		Message: MessageControllerUnavailable,
+	}
+
+	var errs []error
+
+	listOpts := []client.ListOption{
+		client.MatchingLabels(nodeSelector),
+		client.Limit(nodeListPageSize),
+	}
+
+	var nodeList corev1.NodeList
+	for {
+		if err := reader.List(ctx, &nodeList, listOpts...); err != nil {
+			return fmt.Errorf("listing nodes: %w", err)
+		}
+
+		for i := range nodeList.Items {
+			node := &nodeList.Items[i]
+			if _, found := FindNodeCondition(node); !found {
+				continue
+			}
+			if err := PatchNodeCondition(ctx, reader, writer, node.Name, condition); err != nil {
+				log.Error(err, "failed to mark node condition unknown", "node", node.Name)
+				errs = append(errs, err)
+			}
+		}
+
+		if nodeList.Continue == "" {
+			break
+		}
+		listOpts = []client.ListOption{
+			client.MatchingLabels(nodeSelector),
+			client.Limit(nodeListPageSize),
+			client.Continue(nodeList.Continue),
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // RemoveNodeConditions removes the gpu-fractioning.nvidia.com/Ready condition from

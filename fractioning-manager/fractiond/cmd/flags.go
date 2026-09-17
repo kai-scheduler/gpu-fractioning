@@ -9,6 +9,7 @@ import (
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal"
 	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
 )
@@ -61,6 +62,11 @@ type cliFlags struct {
 	criSocket string
 	// stopTimeout is the grace period handed to the runtime per container stop.
 	stopTimeout time.Duration
+	// mpsDrainSocket is mpsd's MPS client-drain endpoint; empty disables the
+	// drain-before-stop call.
+	mpsDrainSocket string
+	// mpsDrainTimeout bounds the drain call made from StopContainer.
+	mpsDrainTimeout time.Duration
 }
 
 func parseFlags() cliFlags {
@@ -82,6 +88,12 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.retroactiveEnforcement, "retroactive-enforcement", env.Bool("RETROACTIVE_ENFORCEMENT", true), "on NRI (re)connect, stop GPU-fractioning containers missing injection so kubelet recreates them correctly")
 	flag.StringVar(&f.criSocket, "cri-socket", env.String("CRI_SOCKET", defaultCRISocketPath), "CRI runtime socket used to stop containers during retroactive enforcement")
 	flag.DurationVar(&f.stopTimeout, "stop-timeout", 30*time.Second, "grace period handed to the runtime for each container stop during enforcement")
+	flag.StringVar(&f.mpsDrainSocket, "mps-drain-socket",
+		env.String("MPS_DRAIN_SOCKET", mpsdrain.DefaultSocketPath),
+		"mpsd socket used to drain a container's MPS clients before it is stopped (empty disables the drain)")
+	flag.DurationVar(&f.mpsDrainTimeout, "mps-drain-timeout",
+		env.Duration("MPS_DRAIN_TIMEOUT", mpsdrain.DefaultCallTimeout),
+		"how long StopContainer waits for the MPS drain before letting the stop proceed")
 	flag.Parse()
 	return f
 }

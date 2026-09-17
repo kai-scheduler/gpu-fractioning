@@ -222,7 +222,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 				WithScheme(clusterPolicyScheme(t)).
 				WithObjects(tt.objects...).
 				Build()
-			checker := NewGpuOperatorDependencyChecker(reader)
+			checker := NewGpuOperatorDependencyChecker(reader, DefaultMinimumGPUOperatorVersion)
 
 			got, err := checker.Check(context.Background(), config, tt.input)
 			if err != nil {
@@ -253,7 +253,7 @@ func TestGpuOperatorDependencyChecker_ToleratesMissingDependencyAPIs(t *testing.
 		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
 	}
 
-	got, err := NewGpuOperatorDependencyChecker(missingDependencyAPIReader{}).Check(context.Background(), config, ready)
+	got, err := NewGpuOperatorDependencyChecker(missingDependencyAPIReader{}, DefaultMinimumGPUOperatorVersion).Check(context.Background(), config, ready)
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -492,5 +492,291 @@ func clusterPolicyStatus(state, readyStatus, errorStatus, message string) map[st
 				"message": message,
 			},
 		},
+	}
+}
+
+// The minimum GPU Operator version is a Helm value, not a compiled-in constant,
+// so clusters stuck on an older operator can run with MPS-only enforcement. The
+// constructor is the only place that value is interpreted, and the one outcome
+// that must never happen is a typo turning the gate off.
+func TestNewGpuOperatorDependencyChecker_NormalizesMinimumVersion(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{name: "empty disables the gate", input: "", expected: ""},
+		{name: "whitespace only disables the gate", input: "   ", expected: ""},
+		{name: "canonical version is kept", input: "v26.7.0", expected: "v26.7.0"},
+		{name: "missing v prefix is added", input: "26.7.0", expected: "v26.7.0"},
+		{name: "two-part version gains a patch", input: "26.7", expected: "v26.7.0"},
+		{name: "surrounding whitespace is trimmed", input: " v26.7.0 ", expected: "v26.7.0"},
+		{name: "prerelease is preserved", input: "26.8-rc.1", expected: "v26.8.0-rc.1"},
+		// The dangerous case: an unparseable value must NOT collapse to "",
+		// which would silently disable the gate on every cluster that has the
+		// typo — the opposite of the conservative default.
+		{name: "garbage falls back to the default", input: "latest", expected: DefaultMinimumGPUOperatorVersion},
+		{name: "empty-ish garbage falls back to the default", input: "v", expected: DefaultMinimumGPUOperatorVersion},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewGpuOperatorDependencyChecker(nil, tt.input).minimumVersion
+			if got != tt.expected {
+				t.Fatalf("minimumVersion = %q, expected %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGpuOperatorDependencyChecker_ConfigurableMinimumVersion(t *testing.T) {
+	trueReady := metav1.Condition{
+		Type:               daemonmgr.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 7,
+		Reason:             daemonmgr.ReasonAllComponentsReady,
+		Message:            daemonmgr.MessageAllComponentsReady,
+	}
+	falseReady := metav1.Condition{
+		Type:               daemonmgr.ConditionReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: 7,
+		Reason:             daemonmgr.ReasonComponentNotReady,
+		Message:            "not ready: FractiondReady",
+	}
+	config := &v1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
+	}
+	readyPolicy := clusterPolicyStatus("ready", "True", "False", "")
+
+	tests := []struct {
+		name           string
+		minimumVersion string
+		labels         map[string]string
+		policyStatus   map[string]any
+		csv            *unstructured.Unstructured
+		input          metav1.Condition
+		expectedStatus metav1.ConditionStatus
+		expectedReason string
+		// messageContains / messageExcludes are checked as substrings of the
+		// resulting condition message.
+		messageContains []string
+		messageExcludes []string
+	}{
+		// --- gate disabled --------------------------------------------------
+		{
+			// A cluster far below every supported floor must still pass once the
+			// gate is off; otherwise "" would not actually disable anything.
+			name:           "empty minimum accepts an ancient version",
+			minimumVersion: "",
+			labels:         map[string]string{clusterPolicyVersionLabel: "v1.0.0"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:           "empty minimum accepts a missing version label",
+			minimumVersion: "",
+			labels:         nil,
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:           "empty minimum accepts an unparseable version label",
+			minimumVersion: "",
+			labels:         map[string]string{clusterPolicyVersionLabel: "nightly-2026-09-17"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			// Turning the version gate off must not also turn off the readiness
+			// checks: an operand that is actually broken still has to surface.
+			name:            "empty minimum still reports a ClusterPolicy error",
+			minimumVersion:  "",
+			labels:          map[string]string{clusterPolicyVersionLabel: "nightly-2026-09-17"},
+			policyStatus:    clusterPolicyStatus("notReady", "False", "True", "operand failed"),
+			input:           falseReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorNotReady,
+			messageContains: []string{"operand failed"},
+		},
+		{
+			name:            "empty minimum still reports an unready ClusterPolicy state",
+			minimumVersion:  "",
+			labels:          nil,
+			policyStatus:    clusterPolicyStatus("notReady", "False", "False", ""),
+			input:           falseReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorNotReady,
+			messageContains: []string{"Ready condition is False"},
+		},
+		{
+			name:           "empty minimum accepts a garbage OpenShift CSV version",
+			minimumVersion: "",
+			csv:            clusterServiceVersionObject("gpu-operator-certified.vmain", "main"),
+			input:          falseReady,
+			expectedStatus: metav1.ConditionFalse,
+			expectedReason: daemonmgr.ReasonComponentNotReady,
+		},
+
+		// --- lowered gate ---------------------------------------------------
+		{
+			name:           "configured minimum accepts its own version",
+			minimumVersion: "v26.7.0",
+			labels:         map[string]string{clusterPolicyVersionLabel: "v26.7.0"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			// The message has to name the configured minimum. Printing the
+			// compiled-in default instead sends an operator chasing a version
+			// their cluster was never gated on.
+			name:            "configured minimum rejects one patch below and names itself",
+			minimumVersion:  "v26.7.0",
+			labels:          map[string]string{clusterPolicyVersionLabel: "v26.6.9"},
+			policyStatus:    readyPolicy,
+			input:           trueReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			messageContains: []string{"v26.6.9", "v26.7.0"},
+			messageExcludes: []string{DefaultMinimumGPUOperatorVersion},
+		},
+		{
+			name:           "bare minimum without a v prefix accepts its own version",
+			minimumVersion: "26.7.0",
+			labels:         map[string]string{clusterPolicyVersionLabel: "v26.7.0"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:            "bare minimum without a v prefix still rejects below it",
+			minimumVersion:  "26.7.0",
+			labels:          map[string]string{clusterPolicyVersionLabel: "v26.6.9"},
+			policyStatus:    readyPolicy,
+			input:           trueReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			messageContains: []string{"v26.7.0"},
+		},
+		{
+			// "26.7" is how a chart value is usually written. It must mean
+			// v26.7.0, not v26.7.1 (the default) and not be rejected outright.
+			name:           "two-part minimum accepts the .0 patch",
+			minimumVersion: "26.7",
+			labels:         map[string]string{clusterPolicyVersionLabel: "v26.7.0"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:            "two-part minimum rejects the previous minor",
+			minimumVersion:  "26.7",
+			labels:          map[string]string{clusterPolicyVersionLabel: "v26.6.9"},
+			policyStatus:    readyPolicy,
+			input:           trueReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			messageContains: []string{"v26.7.0"},
+		},
+		{
+			name:           "whitespace-padded minimum is trimmed, not treated as garbage",
+			minimumVersion: " v26.7.0 ",
+			labels:         map[string]string{clusterPolicyVersionLabel: "v26.7.0"},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:           "lowered minimum also applies on the OpenShift CSV path",
+			minimumVersion: "26.3",
+			csv:            clusterServiceVersionObject("gpu-operator-certified.v26.3.3", "26.3.3"),
+			input:          falseReady,
+			expectedStatus: metav1.ConditionFalse,
+			expectedReason: daemonmgr.ReasonComponentNotReady,
+		},
+
+		// --- garbage minimum falls back, it does not disable -----------------
+		{
+			// The most dangerous regression: a mistyped chart value silently
+			// disabling the gate would let an unsupported GPU Operator through
+			// with no enforcement of the CUDA memory limit at all.
+			name:            "garbage minimum falls back to the default and still rejects",
+			minimumVersion:  "latest",
+			labels:          map[string]string{clusterPolicyVersionLabel: "v26.7.0"},
+			policyStatus:    readyPolicy,
+			input:           trueReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			messageContains: []string{DefaultMinimumGPUOperatorVersion},
+		},
+		{
+			name:           "garbage minimum falls back to the default and accepts it",
+			minimumVersion: "latest",
+			labels:         map[string]string{clusterPolicyVersionLabel: DefaultMinimumGPUOperatorVersion},
+			policyStatus:   readyPolicy,
+			input:          trueReady,
+			expectedStatus: metav1.ConditionTrue,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			name:            "garbage minimum still rejects a missing version label",
+			minimumVersion:  "latest",
+			labels:          nil,
+			policyStatus:    readyPolicy,
+			input:           trueReady,
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			messageContains: []string{"is missing", DefaultMinimumGPUOperatorVersion},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var objects []client.Object
+			if tt.policyStatus != nil || tt.labels != nil {
+				objects = append(objects, clusterPolicyObject(tt.labels, tt.policyStatus))
+			}
+			if tt.csv != nil {
+				objects = append(objects, tt.csv)
+			}
+
+			reader := fake.NewClientBuilder().
+				WithScheme(clusterPolicyScheme(t)).
+				WithObjects(objects...).
+				Build()
+
+			got, err := NewGpuOperatorDependencyChecker(reader, tt.minimumVersion).
+				Check(context.Background(), config, tt.input)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			if got.Status != tt.expectedStatus {
+				t.Fatalf("Status = %s, expected %s (message %q)", got.Status, tt.expectedStatus, got.Message)
+			}
+			if got.Reason != tt.expectedReason {
+				t.Fatalf("Reason = %q, expected %q (message %q)", got.Reason, tt.expectedReason, got.Message)
+			}
+			for _, want := range tt.messageContains {
+				if !strings.Contains(got.Message, want) {
+					t.Errorf("Message = %q, expected to contain %q", got.Message, want)
+				}
+			}
+			for _, unwanted := range tt.messageExcludes {
+				if strings.Contains(got.Message, unwanted) {
+					t.Errorf("Message = %q, expected NOT to contain %q; the failure must name the configured minimum, not the compiled-in default", got.Message, unwanted)
+				}
+			}
+		})
 	}
 }

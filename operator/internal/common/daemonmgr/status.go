@@ -36,6 +36,7 @@ const (
 	ReasonGPUDriverVersionMissing       = "GPUDriverVersionMissing"
 	ReasonGPUDriverVersionInvalid       = "GPUDriverVersionInvalid"
 	ReasonGPUDriverVersionUnsupported   = "GPUDriverVersionUnsupported"
+	ReasonControllerUnavailable         = "ControllerUnavailable"
 
 	// Condition messages.
 	MessageNoTargetNodes      = "no target nodes found"
@@ -43,6 +44,12 @@ const (
 	MessageAllComponentsReady = "all components are healthy"
 	MessageNoComponents       = "no components have been evaluated"
 	MessageAllDaemonsReady    = "all gpu-fractioning daemons are running"
+	// MessageControllerUnavailable is stamped on every targeted node's Ready
+	// condition when the controller shuts down. The condition is only ever
+	// refreshed by a running controller, so leaving it True on exit would let
+	// the scheduler keep placing fractional workloads on nodes whose daemon
+	// health nothing is watching any more.
+	MessageControllerUnavailable = "gpu-fractioning controller is not running; node readiness is unknown"
 )
 
 // DaemonHealthToCondition maps a DaemonHealth to a metav1.Condition for the CR.

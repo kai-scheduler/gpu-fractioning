@@ -25,12 +25,24 @@ import (
 )
 
 const (
-	clusterPolicyVersionLabel   = "app.kubernetes.io/version"
-	minimumGPUOperatorVersion   = "v26.7.1"
-	clusterPolicyReadyState     = "ready"
-	clusterPolicyReadyCondition = "Ready"
-	clusterPolicyErrorCondition = "Error"
-	clusterServiceVersionPrefix = "gpu-operator"
+	clusterPolicyVersionLabel = "app.kubernetes.io/version"
+	// DefaultMinimumGPUOperatorVersion is the GPU Operator release whose bundled
+	// container-toolkit carries the apply-cuda-memory-limits CDI hook, the
+	// mechanism that turns the injected NVIDIA_GPU_MEMORY_LIMIT into a driver
+	// cap. It stays the default because that hook is the strictest enforcement
+	// path available.
+	//
+	// It is not the only one: fractiond also injects MPS's own
+	// CUDA_MPS_PINNED_DEVICE_MEM_LIMIT and CUDA_MPS_ACTIVE_THREAD_PERCENTAGE,
+	// which the MPS control daemon enforces without any toolkit support. On a
+	// cluster running an older GPU Operator, lower this gate (Helm
+	// gpuOperator.minimumVersion, or "" to skip the check entirely) to run with
+	// MPS-only enforcement.
+	DefaultMinimumGPUOperatorVersion = "v26.7.1"
+	clusterPolicyReadyState          = "ready"
+	clusterPolicyReadyCondition      = "Ready"
+	clusterPolicyErrorCondition      = "Error"
+	clusterServiceVersionPrefix      = "gpu-operator"
 
 	// minGPUDriverMajor is the minimum NVIDIA driver major version that supports
 	// the MPS memory and compute limit behavior gpu-fractioning depends on.
@@ -52,10 +64,26 @@ var clusterServiceVersionGVK = schema.GroupVersionKind{
 // GpuOperatorDependencyChecker checks the NVIDIA GPU Operator ClusterPolicy.
 type GpuOperatorDependencyChecker struct {
 	reader client.Reader
+	// minimumVersion is the lowest accepted GPU Operator version, as a semver
+	// string ("v26.7.1"). An empty value skips version validation entirely and
+	// leaves only the ClusterPolicy readiness checks.
+	minimumVersion string
 }
 
-func NewGpuOperatorDependencyChecker(reader client.Reader) GpuOperatorDependencyChecker {
-	return GpuOperatorDependencyChecker{reader: reader}
+// NewGpuOperatorDependencyChecker builds a checker that rejects GPU Operator
+// versions below minimumVersion. An empty minimumVersion disables the version
+// gate; an unparseable one falls back to DefaultMinimumGPUOperatorVersion
+// rather than silently accepting everything.
+func NewGpuOperatorDependencyChecker(reader client.Reader, minimumVersion string) GpuOperatorDependencyChecker {
+	minimumVersion = strings.TrimSpace(minimumVersion)
+	if minimumVersion != "" {
+		normalized, ok := normalizeGPUOperatorVersion(minimumVersion)
+		if !ok {
+			normalized = DefaultMinimumGPUOperatorVersion
+		}
+		minimumVersion = normalized
+	}
+	return GpuOperatorDependencyChecker{reader: reader, minimumVersion: minimumVersion}
 }
 
 func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha1.GpuFractioningConfig, ready metav1.Condition) (metav1.Condition, error) {
@@ -85,14 +113,14 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 		// version is supported, treat the GPU Operator dependency as not the
 		// cause of the current GpuFractioningConfig failure and leave the original
 		// Ready condition unchanged.
-		if msg := gpuOperatorVersionFailureMessage(version, "ClusterServiceVersion"); msg != "" {
+		if msg := gpuOperatorVersionFailureMessage(version, "ClusterServiceVersion", c.minimumVersion); msg != "" {
 			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
 		}
 		return ready, nil
 	}
 
 	version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
-	if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
+	if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel), c.minimumVersion); msg != "" {
 		return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
 	}
 
@@ -207,22 +235,31 @@ func gpuOperatorVersionFromClusterPolicy(clusterPolicy *unstructured.Unstructure
 	return strings.TrimSpace(clusterPolicy.GetLabels()[clusterPolicyVersionLabel])
 }
 
-func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
+// gpuOperatorVersionFailureMessage reports why rawVersion (discovered from
+// source) fails the minimumVersion gate, or "" when it passes. An empty
+// minimumVersion means the gate is switched off, in which case nothing about
+// the discovered version — including it being missing or unparseable — is a
+// failure.
+func gpuOperatorVersionFailureMessage(rawVersion, source, minimumVersion string) string {
+	if minimumVersion == "" {
+		return ""
+	}
+
 	rawVersion = strings.TrimSpace(rawVersion)
 	if rawVersion == "" {
 		return fmt.Sprintf("NVIDIA GPU Operator version from %s is missing; minimum supported version is %s",
-			source, minimumGPUOperatorVersion)
+			source, minimumVersion)
 	}
 
 	version, ok := normalizeGPUOperatorVersion(rawVersion)
 	if !ok {
 		return fmt.Sprintf("NVIDIA GPU Operator version %q from %s is invalid; minimum supported version is %s",
-			rawVersion, source, minimumGPUOperatorVersion)
+			rawVersion, source, minimumVersion)
 	}
 
-	if semver.Compare(version, minimumGPUOperatorVersion) < 0 {
+	if semver.Compare(version, minimumVersion) < 0 {
 		return fmt.Sprintf("NVIDIA GPU Operator version %s is below minimum supported version %s",
-			rawVersion, minimumGPUOperatorVersion)
+			rawVersion, minimumVersion)
 	}
 
 	return ""

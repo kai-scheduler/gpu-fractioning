@@ -33,6 +33,7 @@ const (
 	volumeMPSPipe   = "mps-pipe"
 	volumeMapDir    = "map-dir"
 	volumeCRISocket = "cri-socket"
+	volumeDrainSock = "mps-drain"
 
 	// defaultReadinessPort must match the fractiond binary's default
 	// (fractioning-manager/fractiond): it serves /readyz on --readiness-port. Used
@@ -244,8 +245,11 @@ func (d *daemon) buildFractiondContainer(opts daemonmgr.BuildOptions) (corev1.Co
 		Args:            d.buildArgs(),
 		ReadinessProbe:  readinessProbe,
 		LivenessProbe:   livenessProbe,
-		Resources:       daemonmgr.DaemonResources(fractiondCPURequest, fractiondMemRequest, fractiondMemLimit),
-		Env:             daemonmgr.FIPSOnlyEnv(opts.FIPSOnly),
+		Resources: daemonmgr.ResolveDaemonResources(
+			daemonmgr.DaemonResources(fractiondCPURequest, fractiondMemRequest, fractiondMemLimit),
+			d.fractiondResourceOverrides(),
+		),
+		Env: daemonmgr.FIPSOnlyEnv(opts.FIPSOnly),
 		Ports: []corev1.ContainerPort{
 			{
 				Name:          "readiness",
@@ -304,7 +308,56 @@ func (d *daemon) buildFractiondContainer(opts daemonmgr.BuildOptions) (corev1.Co
 		})
 	}
 
+	// The MPS drain endpoint mpsd serves. Same directory-not-socket mount
+	// rationale as the CRI socket above, with an extra reason: mpsd creates this
+	// socket, and on a fresh node fractiond can easily start first.
+	if socketPath := d.mpsDrainSocketPath(); socketPath != "" {
+		dirType := corev1.HostPathDirectoryOrCreate
+		socketDir := filepath.Dir(socketPath)
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      volumeDrainSock,
+			MountPath: socketDir,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: volumeDrainSock,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: socketDir,
+					Type: &dirType,
+				},
+			},
+		})
+	}
+
 	return container, volumes
+}
+
+// mpsDrainSocketPath is the effective --mps-drain-socket value: the CRD
+// override when set (including an explicit "" that disables the drain call),
+// the shared default otherwise.
+func (d *daemon) mpsDrainSocketPath() string {
+	if d.fractioningSpec != nil && d.fractioningSpec.MPSDrainSocketPath != nil {
+		return *d.fractioningSpec.MPSDrainSocketPath
+	}
+	return daemonmgr.DefaultMPSDrainSocketPath
+}
+
+// fractiondResourceOverrides returns the CRD resource override for the
+// fractiond container, or nil when none is set.
+func (d *daemon) fractiondResourceOverrides() *corev1.ResourceRequirements {
+	if d.fractioningSpec == nil {
+		return nil
+	}
+	return d.fractioningSpec.Resources
+}
+
+// metricsdResourceOverrides returns the CRD resource override for the metricsd
+// sidecar, or nil when none is set.
+func (d *daemon) metricsdResourceOverrides() *corev1.ResourceRequirements {
+	if d.metricsSpec == nil {
+		return nil
+	}
+	return d.metricsSpec.Resources
 }
 
 // buildMetricsdContainer returns the metricsd sidecar. It reads the shared map
@@ -347,7 +400,10 @@ func (d *daemon) buildMetricsdContainer(opts daemonmgr.BuildOptions) corev1.Cont
 		Args:            d.buildMetricsdArgs(),
 		ReadinessProbe:  readinessProbe,
 		LivenessProbe:   livenessProbe,
-		Resources:       daemonmgr.DaemonResources(metricsdCPURequest, metricsdMemRequest, metricsdMemLimit),
+		Resources: daemonmgr.ResolveDaemonResources(
+			daemonmgr.DaemonResources(metricsdCPURequest, metricsdMemRequest, metricsdMemLimit),
+			d.metricsdResourceOverrides(),
+		),
 		Env: []corev1.EnvVar{
 			{Name: "NVIDIA_VISIBLE_DEVICES", Value: "all"},
 			{Name: "NVIDIA_DRIVER_CAPABILITIES", Value: "utility"},
@@ -399,7 +455,13 @@ func (d *daemon) buildMetricsdArgs() []string {
 func (d *daemon) buildArgs() []string {
 	// Always passed explicitly (independent of the fractioningAgent CRD spec
 	// below): it is a Helm-installation-time toggle, not a per-CR setting.
-	args := []string{"--support-sm-sharing=" + strconv.FormatBool(d.supportSMSharing)}
+	args := []string{
+		"--support-sm-sharing=" + strconv.FormatBool(d.supportSMSharing),
+		// Always passed: an explicit "" is the documented way to turn the
+		// drain-before-kill call off, and that is indistinguishable from
+		// "unset" once the flag is omitted.
+		"--mps-drain-socket", d.mpsDrainSocketPath(),
+	}
 
 	spec := d.fractioningSpec
 	if spec == nil {
@@ -439,6 +501,9 @@ func (d *daemon) buildArgs() []string {
 	// defaultReadinessPort, so older images without the flag keep working.
 	if spec.ReadinessPort != nil {
 		args = append(args, "--readiness-port", strconv.Itoa(int(*spec.ReadinessPort)))
+	}
+	if spec.MPSDrainTimeout != nil {
+		args = append(args, "--mps-drain-timeout", spec.MPSDrainTimeout.Duration.String())
 	}
 	args = append(args, "--retroactive-enforcement="+strconv.FormatBool(spec.RetroactiveEnforcement))
 	// Override the CRI socket path used to stop containers during enforcement.

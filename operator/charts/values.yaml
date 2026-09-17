@@ -72,6 +72,66 @@ runtimeClassName: "nvidia"
 # (nvidia-cuda-mps-control -p 3 client list, run in the mpsd pod).
 supportSmSharing: true
 
+# gpuOperator gates the installation on the NVIDIA GPU Operator version found
+# in the cluster.
+gpuOperator:
+  # minimumVersion is the lowest GPU Operator version accepted. The default is
+  # the release whose container-toolkit ships the apply-cuda-memory-limits CDI
+  # hook, which turns the injected NVIDIA_GPU_MEMORY_LIMIT into a driver-enforced
+  # cap.
+  #
+  # That hook is not the only enforcement path: fractiond also injects MPS's own
+  # CUDA_MPS_PINNED_DEVICE_MEM_LIMIT and CUDA_MPS_ACTIVE_THREAD_PERCENTAGE, which
+  # the MPS control daemon applies with no toolkit involvement. On a cluster
+  # running an older GPU Operator, lower this to that version to run with
+  # MPS-only enforcement, or set it to "" to skip the version check entirely.
+  minimumVersion: "v26.7.1"
+
+# markNodesUnknownOnShutdown makes the operator set the
+# gpu-fractioning.nvidia.com/Ready node condition to Unknown on every targeted
+# node as it exits.
+#
+# Nothing else expires that condition. Scale this deployment to zero and every
+# node keeps advertising the readiness it last had, so a scheduler that gates
+# fractional placement on it (KAI does) keeps placing pods on nodes whose daemon
+# health nobody is watching. Marking Unknown makes that visible; the condition
+# returns to True on the next reconcile after the operator comes back.
+#
+# Only the replica that held leadership does this, so a standby restarting in an
+# HA install does not flap the cluster.
+markNodesUnknownOnShutdown: true
+
+# fractioningAgent is passed through verbatim to the default GpuFractioningConfig's
+# spec.fractioningAgent. Every field of that CRD stanza is settable here — via
+# values file or --set — which is what makes environment-specific paths
+# reachable without editing the CR by hand:
+#
+# fractioningAgent:
+#   # microk8s keeps NRI under its snap directory rather than /var/run/nri.
+#   nriSocketPath: /var/snap/microk8s/common/run/nri.sock
+#   # k3s and RKE2 keep containerd under /run/k3s.
+#   criSocketPath: /run/k3s/containerd/containerd.sock
+#   logLevel: debug
+#   resources:
+#     limits:
+#       memory: 512Mi
+fractioningAgent: {}
+
+# mpsDaemon is passed through verbatim to the default GpuFractioningConfig's
+# spec.mpsDaemon:
+#
+# mpsDaemon:
+#   # The built-in memory limit is sized for up to 8 GPUs per node (the MPS
+#   # control daemon holds one CUDA server context per GPU, ~50 MiB of host
+#   # memory each). Raise it on denser nodes.
+#   resources:
+#     limits:
+#       memory: 2Gi
+#   # Restart MPS once a drain leaves no clients attached, so a fault picked up
+#   # by one workload cannot hang the next one. On by default.
+#   recycleWhenIdle: true
+mpsDaemon: {}
+
 # mpsd configures the MPS daemon (mpsd) managed by the operator.
 mpsd:
   # auditLog toggles features.memacct.audit_log in the generated MPS
@@ -81,6 +141,8 @@ mpsd:
   # annotation.
   auditLog: true
 
+# metricsAgent is passed through verbatim to the default GpuFractioningConfig's
+# spec.metricsAgent.
 metricsAgent:
   enabled: true
   # metricNames overrides the exported Prometheus metric names. Leave empty to

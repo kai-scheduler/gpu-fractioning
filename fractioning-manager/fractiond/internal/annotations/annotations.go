@@ -5,6 +5,7 @@ package annotations
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,14 @@ const (
 	// key shape, so infix and suffix collapse into a single constant here —
 	// matching the devicesSuffix pattern above.
 	computeModeSuffix = "gpu-compute.mode"
+
+	// computePortionSuffix builds the per-container compute-portion annotation
+	// key, e.g. "nvidia.com/container.trainer.gpu-compute.portion". The
+	// scheduler writes it at bind time from the GPU portion it charged the
+	// workload's quota for; fractiond turns it into the MPS active-thread
+	// percentage that caps the container's SM occupancy. Same single-key shape
+	// as computeModeSuffix.
+	computePortionSuffix = "gpu-compute.portion"
 
 	// bytesPerMiB is the number of bytes in one MiB.
 	bytesPerMiB = 1024 * 1024
@@ -226,6 +235,50 @@ func ParseComputeMode(annotations map[string]string, containerName, prefix strin
 	}
 }
 
+// ParseComputePortion extracts the share of a GPU's compute a container is
+// entitled to, as the whole-percent value NVIDIA MPS takes in
+// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE.
+//
+// Annotation format:
+//
+//	<prefix><containerName>.gpu-compute.portion = "0.5"
+//
+// The value is a GPU portion in (0, 1] — the same units the scheduler uses to
+// charge quota — not a percentage, so "0.5" means half the GPU's SMs and "1"
+// means all of them. Returning a percentage rather than the raw fraction keeps
+// the rounding decision in one place: MPS only accepts whole percents, and the
+// driver rounds whatever it gets up to SM granularity anyway.
+//
+// Returns found=false when the annotation is absent, which the caller treats as
+// "no compute cap for this container" — the pre-existing behaviour, where a
+// fractional container's memory was capped but its kernels could still occupy
+// every SM on the card. A present-but-unusable value is an error, never a
+// silent fall back to uncapped.
+func ParseComputePortion(annotations map[string]string, containerName, prefix string) (percent int, found bool, err error) {
+	key := containerComputePortionAnnotationKey(prefix, containerName)
+	raw, ok := annotations[key]
+	if !ok {
+		return 0, false, nil
+	}
+
+	portion, parseErr := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if parseErr != nil {
+		return 0, false, fmt.Errorf("parsing annotation %q: invalid GPU portion %q: %w", key, raw, parseErr)
+	}
+	if !(portion > 0) || portion > 1 {
+		return 0, false, fmt.Errorf("parsing annotation %q: GPU portion %q is out of range, expected a value in (0, 1]", key, raw)
+	}
+
+	// Round to nearest, then floor at 1: a portion small enough to round to 0
+	// would otherwise become "0%", which MPS reads as "no limit" — the exact
+	// opposite of what a tiny request asked for.
+	percent = int(math.Round(portion * 100))
+	if percent < 1 {
+		percent = 1
+	}
+	return percent, true, nil
+}
+
 // quantityToMemoryMiB converts a Kubernetes Quantity string to the integer MiB
 // value NVIDIA consumes from the injected memory environment variables.
 func quantityToMemoryMiB(value string) (int64, error) {
@@ -288,6 +341,15 @@ func containerComputeModeAnnotationKey(prefix, containerName string) string {
 	return prefix + containerName + "." + computeModeSuffix
 }
 
+// containerComputePortionAnnotationKey builds the per-container compute-portion
+// annotation key.
+// Example: containerComputePortionAnnotationKey("nvidia.com/container.", "trainer")
+//
+//	→ "nvidia.com/container.trainer.gpu-compute.portion"
+func containerComputePortionAnnotationKey(prefix, containerName string) string {
+	return prefix + containerName + "." + computePortionSuffix
+}
+
 // RequestAnnotationKey returns the annotation key fractiond looks up for a
 // container's GPU-memory request (e.g. for diagnostic logging).
 func RequestAnnotationKey(prefix, containerName string) string {
@@ -311,4 +373,10 @@ func LimitAnnotationKey(prefix, containerName string) string {
 // container's compute-mode selection (e.g. for diagnostic logging).
 func ComputeModeAnnotationKey(prefix, containerName string) string {
 	return containerComputeModeAnnotationKey(prefix, containerName)
+}
+
+// ComputePortionAnnotationKey returns the annotation key fractiond looks up for
+// a container's GPU compute portion (e.g. for diagnostic logging).
+func ComputePortionAnnotationKey(prefix, containerName string) string {
+	return containerComputePortionAnnotationKey(prefix, containerName)
 }

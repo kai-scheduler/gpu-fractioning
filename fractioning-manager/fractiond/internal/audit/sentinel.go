@@ -91,6 +91,13 @@ func (s *Sentinel) Audit(ctx context.Context, pods []*api.PodSandbox, containers
 
 // Wait blocks until all in-flight remediation goroutines have finished. Used by
 // graceful shutdown and by tests to observe remediation deterministically.
+//
+// It has no budget of its own. Each individual stop is bounded by the
+// ContainerStopper's own timeout, but their sum is not, so a snapshot with many
+// violators can hold shutdown for a long time. Both callers are exit paths
+// where kubelet's termination grace period is the real ceiling, which is why
+// this is left as it is; an NRI callback that needed a hard bound would want a
+// WaitFor variant instead.
 func (s *Sentinel) Wait() {
 	s.wg.Wait()
 }

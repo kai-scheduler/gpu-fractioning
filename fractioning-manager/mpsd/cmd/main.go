@@ -11,7 +11,9 @@ import (
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/drain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/driverlabel"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/mpsctl"
 )
 
 func main() {
@@ -26,6 +28,8 @@ func main() {
 		"configPath", flags.configPath,
 		"memacctAuditLog", flags.memacctAuditLog,
 		"supportSMSharing", flags.supportSMSharing,
+		"drainSocket", flags.drainSocket,
+		"recycleWhenIdle", flags.recycleWhenIdle,
 	)
 
 	// Render the MPS control-daemon config. memacct is always on; only the
@@ -74,6 +78,37 @@ func main() {
 		StableThreshold:   flags.stableThreshold,
 		GracefulStopDelay: flags.gracefulStopDelay,
 	}, logger)
+
+	// The drain endpoint is what turns "a pod was deleted" into "its MPS clients
+	// were drained first", so it runs alongside the supervised daemon rather
+	// than as a separate component: it needs the same control binary and the
+	// same supervisor handle it restarts through.
+	if flags.drainSocket != "" {
+		drainServer := drain.New(drain.Options{
+			SocketPath: flags.drainSocket,
+			Control: mpsctl.New(mpsctl.Options{
+				Binary:      flags.mpsBinary,
+				ControlPort: flags.controlPort,
+				PipeDir:     flags.pipeDir,
+				Run:         mpsctl.NewExecRunner(flags.pipeDir),
+				Log:         logger,
+			}),
+			Restarter:          supervisor,
+			ClientDrainTimeout: flags.clientDrainTimeout,
+			RecycleWhenIdle:    flags.recycleWhenIdle,
+			Log:                logger,
+		})
+		go func() {
+			// A drain endpoint that cannot start costs the node its
+			// drain-before-kill protection, but mpsd's job is to keep MPS
+			// running — so log it and carry on rather than taking MPS down.
+			if err := drainServer.Serve(ctx); err != nil {
+				logger.Error("MPS drain endpoint failed", "error", err)
+			}
+		}()
+	} else {
+		logger.Warn("MPS drain endpoint disabled; a container killed with GPU work in flight can wedge MPS for every other tenant of its GPU")
+	}
 
 	if err := supervisor.Run(ctx); err != nil {
 		logger.Error("mpsd exiting with error", "error", err)

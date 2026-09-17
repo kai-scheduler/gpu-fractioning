@@ -4,16 +4,20 @@
 package fractiond
 
 import (
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
 	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
 )
 
 const testDaemonServiceAccountName = "gpu-fractioning-daemon"
@@ -135,11 +139,17 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 		t.Errorf("missing component label, got %v", labels)
 	}
 
-	// The sm-sharing chicken bit is always passed, even when spec is nil (it is
-	// an installation-time toggle, independent of the fractioningAgent CRD spec).
+	// The sm-sharing chicken bit and the MPS drain socket are always passed,
+	// even when spec is nil: both are installation-time settings independent of
+	// the fractioningAgent CRD spec, and for the socket an explicit "" is how it
+	// is switched off, so it cannot be expressed by omitting the flag.
 	args := ctr.Args
-	if len(args) != 1 || args[0] != "--support-sm-sharing=true" {
-		t.Errorf("expected only --support-sm-sharing=true when spec is nil, got %v", args)
+	wantArgs := []string{
+		"--support-sm-sharing=true",
+		"--mps-drain-socket", daemonmgr.DefaultMPSDrainSocketPath,
+	}
+	if !slices.Equal(args, wantArgs) {
+		t.Errorf("args when spec is nil = %v, want %v", args, wantArgs)
 	}
 }
 
@@ -428,6 +438,7 @@ func TestDaemon_BuildDaemonSet_Args(t *testing.T) {
 
 	expected := []string{
 		"--support-sm-sharing=true",
+		"--mps-drain-socket", daemonmgr.DefaultMPSDrainSocketPath,
 		"--annotation-prefix", "custom.prefix.",
 		"--fail-open",
 		"--socket-path", "/custom/nri.sock",
@@ -641,4 +652,283 @@ func hasMount(mounts []corev1.VolumeMount, name, path string, readOnly bool) boo
 		}
 	}
 	return false
+}
+
+func hostPathVolume(volumes []corev1.Volume, name string) *corev1.HostPathVolumeSource {
+	for _, v := range volumes {
+		if v.Name == name {
+			return v.HostPath
+		}
+	}
+	return nil
+}
+
+func mountPathFor(mounts []corev1.VolumeMount, name string) (string, bool) {
+	for _, m := range mounts {
+		if m.Name == name {
+			return m.MountPath, true
+		}
+	}
+	return "", false
+}
+
+func argValue(args []string, flag string) (string, bool) {
+	for i, a := range args {
+		if a == flag {
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}
+
+// A resources block in the CR merges over the built-in defaults. Replacing them
+// would drop the CPU/memory/ephemeral-storage requests, demoting fractiond to
+// BestEffort — and fractiond is the NRI plugin every GPU container's creation
+// blocks on, so it is the last pod that should be evicted under node pressure.
+func TestDaemon_BuildDaemonSet_FractiondResourceOverrideMerges(t *testing.T) {
+	d := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+		},
+	}, nil, testSupportSMSharingTrue)
+	ctr := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Containers[0]
+
+	if got := ctr.Resources.Limits.Memory().String(); got != "1Gi" {
+		t.Errorf("limits.memory = %q, want %q", got, "1Gi")
+	}
+	if got := ctr.Resources.Requests.Cpu().String(); got != fractiondCPURequest {
+		t.Errorf("requests.cpu = %q, want %q; the override replaced instead of merging", got, fractiondCPURequest)
+	}
+	if got := ctr.Resources.Requests.Memory().String(); got != fractiondMemRequest {
+		t.Errorf("requests.memory = %q, want %q", got, fractiondMemRequest)
+	}
+	if ctr.Resources.Requests.StorageEphemeral().IsZero() {
+		t.Error("requests.ephemeral-storage was dropped by the override")
+	}
+	if _, hasCPULimit := ctr.Resources.Limits[corev1.ResourceCPU]; hasCPULimit {
+		t.Error("expected no CPU limit on fractiond")
+	}
+}
+
+// The two containers take their overrides from two different CRD blocks. Wiring
+// both to the same one, or wiring the sidecar's to the main container, is the
+// kind of copy-paste slip that only shows up as an unexplained OOMKill.
+func TestDaemon_BuildDaemonSet_MetricsdResourceOverrideIsIndependent(t *testing.T) {
+	d := NewFractiondDaemon(
+		&v1alpha1.FractioningAgentSpec{
+			Resources: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+			},
+		},
+		&v1alpha1.MetricsAgentSpec{
+			Enabled: true,
+			Resources: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+			},
+		},
+		testSupportSMSharingTrue)
+	spec := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec
+
+	fractiondCtr := containerByName(t, spec.Containers, "fractiond")
+	if got := fractiondCtr.Resources.Limits.Memory().String(); got != "1Gi" {
+		t.Errorf("fractiond limits.memory = %q, want %q", got, "1Gi")
+	}
+
+	metricsd := containerByName(t, spec.Containers, "metricsd")
+	if got := metricsd.Resources.Limits.Memory().String(); got != "2Gi" {
+		t.Errorf("metricsd limits.memory = %q, want %q", got, "2Gi")
+	}
+	if got := metricsd.Resources.Requests.Memory().String(); got != metricsdMemRequest {
+		t.Errorf("metricsd requests.memory = %q, want %q; the override replaced instead of merging", got, metricsdMemRequest)
+	}
+
+	// A metricsd override must not leak into fractiond and vice versa: both
+	// resolve against the same built-in defaults in the same reconcile.
+	if got := fractiondCtr.Resources.Requests.Memory().String(); got != fractiondMemRequest {
+		t.Errorf("fractiond requests.memory = %q, want %q; the metricsd override leaked across containers", got, fractiondMemRequest)
+	}
+
+	// An override on only one container leaves the other on its defaults.
+	spec = NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{
+		Enabled: true,
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+		},
+	}, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts()).Spec.Template.Spec
+	fractiondDefaults := containerByName(t, spec.Containers, "fractiond").Resources
+	if got := fractiondDefaults.Limits.Memory().String(); got != fractiondMemLimit {
+		t.Errorf("fractiond limits.memory = %q, want the default %q when only metricsd is overridden", got, fractiondMemLimit)
+	}
+}
+
+// mpsd creates the drain socket, and on a fresh node fractiond can easily start
+// first. Mounting the socket file with HostPathType Socket would block fractiond
+// from starting at all — taking down its core NRI injection, not just the drain.
+// The parent directory with DirectoryOrCreate always mounts.
+func TestDaemon_BuildDaemonSet_MPSDrainSocketMountsParentDirectory(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     *v1alpha1.FractioningAgentSpec
+		wantDir  string
+		wantPath string
+	}{
+		{
+			name:     "nil spec uses the shared default",
+			spec:     nil,
+			wantDir:  "/var/run/gpu-fractioning/drain",
+			wantPath: daemonmgr.DefaultMPSDrainSocketPath,
+		},
+		{
+			name:     "unset mpsDrainSocketPath uses the shared default",
+			spec:     &v1alpha1.FractioningAgentSpec{},
+			wantDir:  "/var/run/gpu-fractioning/drain",
+			wantPath: daemonmgr.DefaultMPSDrainSocketPath,
+		},
+		{
+			name:     "custom path is honoured",
+			spec:     &v1alpha1.FractioningAgentSpec{MPSDrainSocketPath: ptr.To("/custom/drain/mps.sock")},
+			wantDir:  "/custom/drain",
+			wantPath: "/custom/drain/mps.sock",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds := NewFractiondDaemon(tt.spec, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+			ctr := ds.Spec.Template.Spec.Containers[0]
+
+			vol := hostPathVolume(ds.Spec.Template.Spec.Volumes, volumeDrainSock)
+			if vol == nil {
+				t.Fatalf("volume %q not found in %v", volumeDrainSock, ds.Spec.Template.Spec.Volumes)
+			}
+			if vol.Path == tt.wantPath {
+				t.Fatalf("drain volume path = %q, which is the socket file itself; the kubelet would refuse to start fractiond before mpsd creates it", vol.Path)
+			}
+			if vol.Path != tt.wantDir {
+				t.Errorf("drain volume path = %q, want %q", vol.Path, tt.wantDir)
+			}
+			if vol.Type == nil {
+				t.Errorf("drain volume type = nil, want %q", corev1.HostPathDirectoryOrCreate)
+			} else if *vol.Type != corev1.HostPathDirectoryOrCreate {
+				// Dereferenced: %v on the pointer prints an address, which says
+				// nothing about which HostPathType was actually rendered.
+				t.Errorf("drain volume type = %q, want %q", *vol.Type, corev1.HostPathDirectoryOrCreate)
+			}
+
+			mount, found := mountPathFor(ctr.VolumeMounts, volumeDrainSock)
+			if !found {
+				t.Fatalf("mount %q not found in %v", volumeDrainSock, ctr.VolumeMounts)
+			}
+			if mount != tt.wantDir {
+				t.Errorf("drain mount path = %q, want %q", mount, tt.wantDir)
+			}
+
+			got, present := argValue(ctr.Args, "--mps-drain-socket")
+			if !present || got != tt.wantPath {
+				t.Errorf("--mps-drain-socket = %q (present=%t), want %q", got, present, tt.wantPath)
+			}
+		})
+	}
+}
+
+// An explicit "" switches the drain-before-kill call off. The mount goes away,
+// but the flag must still be passed empty: omitting it is indistinguishable from
+// "unset", which the binary reads as "use your default" and re-enables the call.
+func TestDaemon_BuildDaemonSet_MPSDrainSocketDisabled(t *testing.T) {
+	ds := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{
+		MPSDrainSocketPath: ptr.To(""),
+	}, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+	ctr := ds.Spec.Template.Spec.Containers[0]
+
+	if vol := hostPathVolume(ds.Spec.Template.Spec.Volumes, volumeDrainSock); vol != nil {
+		t.Errorf("drain volume = %+v, want it absent when the drain call is disabled", vol)
+	}
+	if _, found := mountPathFor(ctr.VolumeMounts, volumeDrainSock); found {
+		t.Errorf("drain mount present in %v, want it absent when the drain call is disabled", ctr.VolumeMounts)
+	}
+
+	got, present := argValue(ctr.Args, "--mps-drain-socket")
+	if !present {
+		t.Fatalf("args = %v, want --mps-drain-socket passed even when disabled", ctr.Args)
+	}
+	if got != "" {
+		t.Errorf("--mps-drain-socket = %q, want an empty value", got)
+	}
+}
+
+// mpsDrainTimeout only appears when the CR sets it, so the binary keeps owning
+// its own default and a future change to it is not frozen into the DaemonSet.
+func TestDaemon_BuildDaemonSet_MPSDrainTimeoutArgOnlyWhenSet(t *testing.T) {
+	ctr := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{}, nil, testSupportSMSharingTrue).
+		BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Containers[0]
+	if _, present := argValue(ctr.Args, "--mps-drain-timeout"); present {
+		t.Errorf("args = %v, want no --mps-drain-timeout when the CR leaves it unset", ctr.Args)
+	}
+
+	ctr = NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{
+		MPSDrainTimeout: &metav1.Duration{Duration: 20 * time.Second},
+	}, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Containers[0]
+
+	got, present := argValue(ctr.Args, "--mps-drain-timeout")
+	if !present || got != "20s" {
+		t.Errorf("--mps-drain-timeout = %q (present=%t), want %q", got, present, "20s")
+	}
+}
+
+// The drain only works if fractiond dials exactly the socket mpsd serves. The
+// two daemons derive their defaults independently, so if those ever diverge
+// nothing fails loudly: fractiond's StopContainer hook just never reaches mpsd
+// and every container is killed without draining its MPS clients — the wedged
+// server this whole feature exists to prevent.
+func TestMPSDrainSocketDefaultAgreesWithMpsd(t *testing.T) {
+	fractiondDS := NewFractiondDaemon(nil, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+	fractiondCtr := fractiondDS.Spec.Template.Spec.Containers[0]
+
+	mpsdOpts := defaultOpts()
+	mpsdOpts.DefaultImages = map[string]daemonmgr.ImageSpec{
+		"mpsd": {Repository: "fake.io/org/mpsd", Tag: "v0.1.0"},
+	}
+	mpsdDS := mpsd.NewMpsdDaemon(nil, true, true).BuildDaemonSet(mpsdOpts)
+	mpsdCtr := mpsdDS.Spec.Template.Spec.Containers[0]
+
+	fractiondPath, ok := argValue(fractiondCtr.Args, "--mps-drain-socket")
+	if !ok {
+		t.Fatalf("fractiond args = %v, want --mps-drain-socket", fractiondCtr.Args)
+	}
+	mpsdPath, ok := argValue(mpsdCtr.Args, "--drain-socket")
+	if !ok {
+		t.Fatalf("mpsd args = %v, want --drain-socket", mpsdCtr.Args)
+	}
+	if fractiondPath != mpsdPath {
+		t.Fatalf("fractiond dials %q but mpsd serves %q; the drain would silently never happen", fractiondPath, mpsdPath)
+	}
+	// Pinned to the literal, not to daemonmgr.DefaultMPSDrainSocketPath: both
+	// sides of the comparison above already read that constant, so checking it
+	// again against itself can only ever hold. The literal is the only thing
+	// here that also has to match the daemon binaries' own default in
+	// fractioning-manager/common/mpsdrain.DefaultSocketPath, which is a separate
+	// copy of the same string.
+	const wantSocket = "/var/run/gpu-fractioning/drain/mpsd.sock"
+	if fractiondPath != wantSocket {
+		t.Errorf("default drain socket = %q, want %q (keep in sync with fractioning-manager/common/mpsdrain.DefaultSocketPath)", fractiondPath, wantSocket)
+	}
+
+	// Both pods must also mount the same host directory, or each daemon gets
+	// its own private view of a socket the other cannot see.
+	fractiondVol := hostPathVolume(fractiondDS.Spec.Template.Spec.Volumes, volumeDrainSock)
+	var mpsdVol *corev1.HostPathVolumeSource
+	for _, v := range mpsdDS.Spec.Template.Spec.Volumes {
+		if v.HostPath != nil && v.HostPath.Path == filepath.Dir(mpsdPath) {
+			mpsdVol = v.HostPath
+		}
+	}
+	if fractiondVol == nil || mpsdVol == nil {
+		t.Fatalf("drain hostPath volumes: fractiond=%+v mpsd=%+v", fractiondVol, mpsdVol)
+	}
+	if fractiondVol.Path != mpsdVol.Path {
+		t.Errorf("fractiond mounts %q but mpsd mounts %q", fractiondVol.Path, mpsdVol.Path)
+	}
 }

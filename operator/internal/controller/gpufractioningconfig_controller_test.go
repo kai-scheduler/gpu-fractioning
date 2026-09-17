@@ -5,6 +5,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -13,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -126,7 +129,7 @@ func gpuOperatorCheckerWithClusterPolicyVersion(version string) GpuOperatorDepen
 			map[string]string{clusterPolicyVersionLabel: version},
 			clusterPolicyStatus("ready", "True", "False", ""),
 		)).
-		Build())
+		Build(), DefaultMinimumGPUOperatorVersion)
 }
 
 // Fixed args passed to every NewGpuFractioningConfigReconciler call below;
@@ -135,6 +138,9 @@ const (
 	testMpsdAuditLogTrue     = true
 	testSupportSMSharingTrue = true
 	testFIPSOnlyDisabled     = false
+	// testMinGPUOperatorVersion pins the dependency gate to the shipped default
+	// so these tests keep exercising it, independent of any install-time override.
+	testMinGPUOperatorVersion = DefaultMinimumGPUOperatorVersion
 )
 
 var _ = Describe("GpuFractioningConfig Controller", func() {
@@ -178,6 +184,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -204,6 +211,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -216,6 +224,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
 
@@ -237,6 +246,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
 
@@ -265,6 +275,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", nil, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -286,6 +297,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -302,6 +314,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -414,6 +427,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			reconciler = NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(20),
 				namespace, defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testMinGPUOperatorVersion,
 			)
 			createdNodes = nil
 		})
@@ -526,3 +540,214 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 		})
 	})
 })
+
+func shutdownScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	if err := corev1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	if err := gpufractioningv1alpha1.AddToScheme(s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func shutdownNode(name string, labels map[string]string, withCondition bool) *corev1.Node {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	node.Status.Conditions = []corev1.NodeCondition{{
+		Type:   corev1.NodeReady,
+		Status: corev1.ConditionTrue,
+	}}
+	if withCondition {
+		node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{
+			Type:   corev1.NodeConditionType(daemonmgr.NodeConditionType),
+			Status: corev1.ConditionTrue,
+			Reason: daemonmgr.ReasonAllDaemonsReady,
+		})
+	}
+	return node
+}
+
+func shutdownNodeCondition(t *testing.T, c client.Client, name string) (corev1.NodeCondition, bool) {
+	t.Helper()
+	var node corev1.Node
+	if err := c.Get(context.Background(), types.NamespacedName{Name: name}, &node); err != nil {
+		t.Fatalf("getting node %s: %v", name, err)
+	}
+	return daemonmgr.FindNodeCondition(&node)
+}
+
+// This runs on the way out of a process that is already shutting down. An
+// operator uninstalled CR-first (or never installed at all) must not turn a
+// clean exit into a failure path; there is nothing it was asserting about any
+// node, so there is nothing to retract.
+func TestMarkNodesUnavailable_MissingConfigIsSuccess(t *testing.T) {
+	node := shutdownNode("gpu-node", map[string]string{"nvidia.com/gpu.present": "true"}, true)
+	c := fake.NewClientBuilder().
+		WithScheme(shutdownScheme(t)).
+		WithStatusSubresource(&corev1.Node{}).
+		WithObjects(node).
+		Build()
+
+	if err := MarkNodesUnavailable(context.Background(), c, c); err != nil {
+		t.Fatalf("MarkNodesUnavailable() error = %v, expected nil when no CR exists", err)
+	}
+
+	got, found := shutdownNodeCondition(t, c, "gpu-node")
+	if !found || got.Status != corev1.ConditionTrue {
+		t.Errorf("condition = %+v (found=%t), expected it left untouched with no CR to scope the sweep", got, found)
+	}
+}
+
+// The CR's nodeSelector is the only thing scoping the sweep. Marking a node the
+// CR does not target would have this operator retract a readiness statement it
+// never made — and on a node whose daemons are managed elsewhere, overwrite a
+// condition that is still being maintained.
+func TestMarkNodesUnavailable_MarksOnlySelectedNodes(t *testing.T) {
+	config := &gpufractioningv1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+		Spec: gpufractioningv1alpha1.GpuFractioningConfigSpec{
+			NodeSelector: map[string]string{"nvidia.com/gpu.present": "true"},
+		},
+	}
+	targeted := shutdownNode("gpu-node", map[string]string{"nvidia.com/gpu.present": "true"}, true)
+	untargeted := shutdownNode("cpu-node", map[string]string{"nvidia.com/gpu.present": "false"}, true)
+	// Targeted but never reported on: the DaemonSet has not landed here yet.
+	unreported := shutdownNode("new-gpu-node", map[string]string{"nvidia.com/gpu.present": "true"}, false)
+
+	c := fake.NewClientBuilder().
+		WithScheme(shutdownScheme(t)).
+		WithStatusSubresource(&corev1.Node{}).
+		WithObjects(config, targeted, untargeted, unreported).
+		Build()
+
+	if err := MarkNodesUnavailable(context.Background(), c, c); err != nil {
+		t.Fatalf("MarkNodesUnavailable() error = %v", err)
+	}
+
+	got, found := shutdownNodeCondition(t, c, "gpu-node")
+	if !found {
+		t.Fatal("targeted node lost its condition")
+	}
+	if got.Status != corev1.ConditionUnknown {
+		t.Errorf("targeted node status = %s, expected %s", got.Status, corev1.ConditionUnknown)
+	}
+	if got.Reason != daemonmgr.ReasonControllerUnavailable {
+		t.Errorf("targeted node reason = %q, expected %q", got.Reason, daemonmgr.ReasonControllerUnavailable)
+	}
+
+	other, found := shutdownNodeCondition(t, c, "cpu-node")
+	if !found || other.Status != corev1.ConditionTrue {
+		t.Errorf("untargeted node condition = %+v (found=%t), expected it left at True", other, found)
+	}
+
+	if _, found := shutdownNodeCondition(t, c, "new-gpu-node"); found {
+		t.Error("new-gpu-node gained a condition the operator never set on it")
+	}
+}
+
+// A CR with no nodeSelector targets every node, and the shutdown sweep has to
+// follow it rather than quietly marking nothing.
+func TestMarkNodesUnavailable_EmptySelectorMarksEveryReportedNode(t *testing.T) {
+	config := &gpufractioningv1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default"},
+	}
+	a := shutdownNode("node-a", nil, true)
+	b := shutdownNode("node-b", map[string]string{"any": "value"}, true)
+
+	c := fake.NewClientBuilder().
+		WithScheme(shutdownScheme(t)).
+		WithStatusSubresource(&corev1.Node{}).
+		WithObjects(config, a, b).
+		Build()
+
+	if err := MarkNodesUnavailable(context.Background(), c, c); err != nil {
+		t.Fatalf("MarkNodesUnavailable() error = %v", err)
+	}
+
+	for _, name := range []string{"node-a", "node-b"} {
+		got, found := shutdownNodeCondition(t, c, name)
+		if !found || got.Status != corev1.ConditionUnknown {
+			t.Errorf("node %s condition = %+v (found=%t), expected Unknown", name, got, found)
+		}
+	}
+}
+
+// The CRD enforces a singleton named "default". A CR under any other name is
+// not this operator's config, and picking it up (e.g. by listing instead of
+// getting by name) would apply a stranger's nodeSelector on shutdown.
+func TestMarkNodesUnavailable_IgnoresNonSingletonConfigName(t *testing.T) {
+	config := &gpufractioningv1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "not-the-singleton"},
+		Spec: gpufractioningv1alpha1.GpuFractioningConfigSpec{
+			NodeSelector: map[string]string{"nvidia.com/gpu.present": "true"},
+		},
+	}
+	node := shutdownNode("gpu-node", map[string]string{"nvidia.com/gpu.present": "true"}, true)
+
+	c := fake.NewClientBuilder().
+		WithScheme(shutdownScheme(t)).
+		WithStatusSubresource(&corev1.Node{}).
+		WithObjects(config, node).
+		Build()
+
+	if err := MarkNodesUnavailable(context.Background(), c, c); err != nil {
+		t.Fatalf("MarkNodesUnavailable() error = %v", err)
+	}
+
+	got, found := shutdownNodeCondition(t, c, "gpu-node")
+	if !found || got.Status != corev1.ConditionTrue {
+		t.Errorf("condition = %+v (found=%t), expected it untouched for a non-singleton CR", got, found)
+	}
+}
+
+// The CRD may already be gone when the operator exits (helm uninstall removes
+// it), which is not a shutdown failure worth logging as an error.
+func TestMarkNodesUnavailable_MissingCRDIsSuccess(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(shutdownScheme(t)).Build()
+	reader := configErrorReader{
+		Reader: c,
+		err: &meta.NoKindMatchError{
+			GroupKind:        schema.GroupKind{Group: "gpu-fractioning.kai.scheduler", Kind: "GpuFractioningConfig"},
+			SearchedVersions: []string{"v1alpha1"},
+		},
+	}
+
+	if err := MarkNodesUnavailable(context.Background(), c, reader); err != nil {
+		t.Fatalf("MarkNodesUnavailable() error = %v, expected nil when the CRD is absent", err)
+	}
+}
+
+// Any other read failure is a genuine "we could not tell which nodes to mark",
+// and must be surfaced rather than reported as a completed sweep.
+func TestMarkNodesUnavailable_ReadErrorIsSurfaced(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(shutdownScheme(t)).Build()
+	reader := configErrorReader{
+		Reader: c,
+		err:    apierrors.NewInternalError(errors.New("etcd is unreachable")),
+	}
+
+	err := MarkNodesUnavailable(context.Background(), c, reader)
+	if err == nil {
+		t.Fatal("MarkNodesUnavailable() error = nil, expected the read failure surfaced")
+	}
+	if !strings.Contains(err.Error(), "etcd is unreachable") {
+		t.Errorf("error = %q, expected it to wrap the read failure", err)
+	}
+}
+
+// configErrorReader fails only the GpuFractioningConfig read, so the shutdown
+// sweep's handling of a missing or unreadable CR can be exercised without an
+// API server.
+type configErrorReader struct {
+	client.Reader
+	err error
+}
+
+func (r configErrorReader) Get(ctx context.Context, key types.NamespacedName, obj client.Object, opts ...client.GetOption) error {
+	if _, ok := obj.(*gpufractioningv1alpha1.GpuFractioningConfig); ok {
+		return r.err
+	}
+	return r.Reader.Get(ctx, key, obj, opts...)
+}

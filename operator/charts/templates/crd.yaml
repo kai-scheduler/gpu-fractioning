@@ -108,6 +108,28 @@ spec:
                       format: int32
                       minimum: 1
                       maximum: 65535
+                    mpsDrainSocketPath:
+                      description: >-
+                        mpsDrainSocketPath is the host path of the unix socket mpsd
+                        serves its MPS client-drain endpoint on. fractiond calls it
+                        from its StopContainer hook so a container's MPS clients are
+                        drained before the runtime kills them. Must match
+                        mpsDaemon.drainSocketPath. "" disables the drain call.
+                      type: string
+                    mpsDrainTimeout:
+                      description: >-
+                        mpsDrainTimeout bounds how long StopContainer waits for the
+                        drain. Expiry never blocks the container stop. Default: 15s.
+                      type: string
+                    resources:
+                      description: >-
+                        resources overrides the compute resources of the fractiond
+                        container, merged over the built-in defaults.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      x-kubernetes-validations:
+                        - rule: "!has(self.claims) || size(self.claims) == 0"
+                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
                 metricsAgent:
                   description: >-
                     metricsAgent configures the GPU metrics exporter (metricsd),
@@ -160,6 +182,15 @@ spec:
                           type: string
                         gpuSmUtilizationPercentNormalized:
                           type: string
+                    resources:
+                      description: >-
+                        resources overrides the compute resources of the metricsd
+                        container, merged over the built-in defaults.
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      x-kubernetes-validations:
+                        - rule: "!has(self.claims) || size(self.claims) == 0"
+                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
                 mpsDaemon:
                   description: mpsDaemon configures the MPS daemon supervisor (mpsd).
                   type: object
@@ -175,6 +206,36 @@ spec:
                       type: string
                     gracefulStopDelay:
                       type: string
+                    drainSocketPath:
+                      description: >-
+                        drainSocketPath is the host path of the unix socket mpsd
+                        serves its MPS client-drain endpoint on. Must match
+                        fractioningAgent.mpsDrainSocketPath. "" disables the endpoint.
+                      type: string
+                    recycleWhenIdle:
+                      description: >-
+                        recycleWhenIdle restarts the MPS control daemon once the last
+                        MPS client on the node disconnects through a drain, so an
+                        unconsumed fault can never outlive the workload that caused
+                        it. Default: true.
+                      type: boolean
+                    clientDrainTimeout:
+                      description: >-
+                        clientDrainTimeout bounds how long mpsd waits for one MPS
+                        client to drain. Exceeding it is treated as a wedged MPS
+                        server and escalates to a restart. Default: 30s.
+                      type: string
+                    resources:
+                      description: >-
+                        resources overrides the compute resources of the mpsd
+                        container, merged over the built-in defaults. The default is
+                        sized for up to 8 GPUs per node (one MPS server context per
+                        GPU, ~50 MiB of host memory each).
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                      x-kubernetes-validations:
+                        - rule: "!has(self.claims) || size(self.claims) == 0"
+                          message: "resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
             status:
               description: status defines the observed state of GpuFractioningConfig
               type: object

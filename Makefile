@@ -217,6 +217,15 @@ third-party: ## Regenerate THIRD-PARTY.txt from the linked dependency set.
 third-party-check: ## Fail if THIRD-PARTY.txt does not match the linked dependency set.
 	python3 hack/gen-third-party.py --check
 
+.PHONY: crd-validations-check
+
+# The chart ships its own trimmed copy of the CRD, and that copy is what
+# installs. A CEL rule added via a kubebuilder marker and not mirrored there is
+# enforced nowhere real, and both files stay individually valid, so nothing else
+# in the build notices. Requires helm, so it is not part of `test`.
+crd-validations-check: ## Fail if the chart CRD and the generated CRD disagree on their CEL rules.
+	python3 hack/check-crd-validations.py
+
 # -----------------------------------------------------------
 # Generate (CRDs, deepcopy, manifests) — delegated to operator
 # -----------------------------------------------------------

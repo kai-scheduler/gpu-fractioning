@@ -7,7 +7,12 @@
 // are set once at pod creation and never change at runtime.
 package config
 
-import "flag"
+import (
+	"flag"
+
+	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/controller"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+)
 
 // Config holds the operator's runtime settings parsed from CLI flags.
 type Config struct {
@@ -20,6 +25,16 @@ type Config struct {
 	MetricsCertName   string // filename of the metrics TLS certificate
 	MetricsCertKey    string // filename of the metrics TLS private key
 	Development       bool   // enable development-mode logging (debug, human-readable)
+
+	// MinGPUOperatorVersion is the lowest NVIDIA GPU Operator version the
+	// dependency check accepts. Empty disables the version gate.
+	MinGPUOperatorVersion string
+
+	// MarkNodesUnknownOnShutdown makes the operator flip every targeted node's
+	// gpu-fractioning Ready condition to Unknown as it exits, so a scaled-down
+	// or evicted operator does not leave nodes advertising a readiness nothing
+	// is maintaining.
+	MarkNodesUnknownOnShutdown bool
 }
 
 // ParseFlags registers CLI flags, parses them, and returns the populated Config.
@@ -38,6 +53,12 @@ func ParseFlags() Config {
 	flag.StringVar(&cfg.MetricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&cfg.EnableHTTP2, "enable-http2", false, "If set, HTTP/2 will be enabled for the metrics server.")
 	flag.BoolVar(&cfg.Development, "development", false, "Enable development-mode logging (debug level, human-readable).")
+	flag.StringVar(&cfg.MinGPUOperatorVersion, "min-gpu-operator-version",
+		env.String("MIN_GPU_OPERATOR_VERSION", controller.DefaultMinimumGPUOperatorVersion),
+		"Minimum NVIDIA GPU Operator version accepted by the dependency check. Empty disables the version gate.")
+	flag.BoolVar(&cfg.MarkNodesUnknownOnShutdown, "mark-nodes-unknown-on-shutdown",
+		env.Bool("MARK_NODES_UNKNOWN_ON_SHUTDOWN", true),
+		"On shutdown, set the gpu-fractioning Ready condition to Unknown on every targeted node.")
 	flag.Parse()
 	return cfg
 }

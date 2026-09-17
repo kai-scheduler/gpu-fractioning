@@ -107,6 +107,34 @@ type FractioningAgentSpec struct {
 	// +kubebuilder:validation:Maximum=65535
 	// +optional
 	ReadinessPort *int32 `json:"readinessPort,omitempty"`
+
+	// mpsDrainSocketPath is the host path of the unix socket mpsd serves its
+	// MPS client-drain endpoint on. fractiond calls it from its StopContainer
+	// hook to drain a container's MPS clients before the runtime kills them,
+	// which is what keeps a killed-mid-kernel client from wedging the MPS
+	// server for every other tenant of the GPU. Must match mpsDaemon.drainSocketPath.
+	// Default: /var/run/gpu-fractioning/drain/mpsd.sock. Set to "" to disable
+	// the drain call.
+	// +optional
+	MPSDrainSocketPath *string `json:"mpsDrainSocketPath,omitempty"`
+
+	// mpsDrainTimeout bounds how long StopContainer waits for mpsd to drain the
+	// container's MPS clients. The hook always lets the stop proceed when it
+	// expires — a slow drain delays a container stop, it never blocks it.
+	// Default: 15s.
+	// +optional
+	MPSDrainTimeout *metav1.Duration `json:"mpsDrainTimeout,omitempty"`
+
+	// resources overrides the compute resources of the fractiond container.
+	// Merged over the built-in defaults, so setting only limits.memory keeps
+	// the default requests.
+	//
+	// claims is rejected rather than ignored: the type carries it, but a claim
+	// entry has to name an entry in the pod's spec.resourceClaims, which the
+	// operator builds and never populates. Accepting it would silently drop it.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.claims) || size(self.claims) == 0",message="resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // MetricsAgentSpec configures the metricsd sidecar in the fractiond DaemonSet.
@@ -146,6 +174,13 @@ type MetricsAgentSpec struct {
 	// (namespace, pod, pod_uuid, gpu_uuid, gpu) are fixed.
 	// +optional
 	MetricNames *MetricNamesSpec `json:"metricNames,omitempty"`
+
+	// resources overrides the compute resources of the metricsd container.
+	// Merged over the built-in defaults. claims is rejected, see
+	// FractioningAgentSpec.Resources.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.claims) || size(self.claims) == 0",message="resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // MetricNamesSpec overrides the Prometheus metric names metricsd exports.
@@ -192,6 +227,38 @@ type MpsDaemonSpec struct {
 	// before force-killing it. Default: 60s.
 	// +optional
 	GracefulStopDelay *metav1.Duration `json:"gracefulStopDelay,omitempty"`
+
+	// drainSocketPath is the host path of the unix socket mpsd serves its MPS
+	// client-drain endpoint on, and the path fractiond calls. Must match
+	// fractioningAgent.mpsDrainSocketPath. Default:
+	// /var/run/gpu-fractioning/drain/mpsd.sock. Set to "" to disable the
+	// endpoint (and with it the drain-before-kill protection).
+	// +optional
+	DrainSocketPath *string `json:"drainSocketPath,omitempty"`
+
+	// recycleWhenIdle restarts the MPS control daemon once the last MPS client
+	// on the node disconnects through a drain. An MPS server that lost a client
+	// mid-kernel keeps an unconsumed fault that hangs every future client, and
+	// the only recovery is an MPS restart; bouncing it while no client is
+	// attached makes that recovery free. Default: true.
+	// +optional
+	RecycleWhenIdle *bool `json:"recycleWhenIdle,omitempty"`
+
+	// clientDrainTimeout bounds how long mpsd waits for a single MPS client to
+	// finish draining after it is terminated. Exceeding it is treated as a
+	// wedged server and escalates to an MPS restart. Default: 30s.
+	// +optional
+	ClientDrainTimeout *metav1.Duration `json:"clientDrainTimeout,omitempty"`
+
+	// resources overrides the compute resources of the mpsd container. The
+	// built-in default is sized for a node with up to 8 GPUs: the MPS control
+	// daemon holds a CUDA server context per GPU, each costing roughly 50 MiB
+	// of host memory. Raise limits.memory on nodes with more GPUs than that.
+	// Merged over the built-in defaults. claims is rejected, see
+	// FractioningAgentSpec.Resources.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.claims) || size(self.claims) == 0",message="resources.claims is not supported: the operator builds the daemon pod spec and never populates spec.resourceClaims, so a claim entry could not resolve"
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // GpuFractioningConfigStatus defines the observed state of GpuFractioningConfig.

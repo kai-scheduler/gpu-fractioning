@@ -147,8 +147,29 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
 
+	// The compute cap follows the same fail-open contract as the compute mode
+	// above: fail-closed means the container was never created by us, fail-open
+	// means it was created without the cap and is still owed everything else.
+	_, hasComputeCap, err := annotations.ParseComputePortion(pod.GetAnnotations(), container.GetName(), d.annotationPrefix)
+	if err != nil {
+		if !d.failOpen {
+			d.logger().Warn("audit: skipping container with unparseable GPU compute portion annotation",
+				"container", container.GetName(),
+				"pod", pod.GetName(),
+				"error", err,
+			)
+			return violator{}, false
+		}
+		d.logger().Warn("audit: unparseable GPU compute portion annotation, auditing without a compute cap (fail-open)",
+			"container", container.GetName(),
+			"pod", pod.GetName(),
+			"error", err,
+		)
+		hasComputeCap = false
+	}
+
 	visibleDevices := annotations.ParseVisibleDevices(pod.GetAnnotations(), container.GetName(), d.annotationPrefix)
-	missing := d.missingInjection(cfg, visibleDevices, computeMode, container)
+	missing := d.missingInjection(cfg, visibleDevices, computeMode, hasComputeCap, container)
 	if len(missing) == 0 {
 		return violator{}, false
 	}
@@ -163,14 +184,14 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 }
 
 // missingInjection compares the expected injection (derived from cfg, the
-// pod's device assignment, and its compute mode exactly as buildAdjustment
-// would) against the live container's env and mounts, returning the expected
-// pieces that are absent. Presence-based, not value-equality: a mis-set value
+// pod's device assignment, its compute mode and whether it carries a compute
+// cap, exactly as buildAdjustment would) against the live container's env and
+// mounts, returning the expected pieces that are absent. Presence-based, not value-equality: a mis-set value
 // is out of scope and would risk false positives from formatting differences.
 // visibleDevices is the pod's GPU device assignment ("" when unassigned);
 // NVIDIA_VISIBLE_DEVICES is expected only when it is set, matching
 // buildAdjustment's conditional injection.
-func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevices string, computeMode annotations.ComputeMode, container *api.Container) []string {
+func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevices string, computeMode annotations.ComputeMode, hasComputeCap bool, container *api.Container) []string {
 	env := presentEnv(container.GetEnv())
 	expectedMountSource, expectedMountDestination := injection.MPSPipeMount(d.mpsPipeDirectory, computeMode)
 
@@ -187,6 +208,15 @@ func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevic
 	}
 	if visibleDevices != "" && !env[injection.EnvVisibleDevices] {
 		missing = append(missing, "env:"+injection.EnvVisibleDevices)
+	}
+	// The MPS-enforced caps, expected under exactly the conditions
+	// buildAdjustment injects them under: the memory one needs both a limit and
+	// a known device count, the compute one needs the portion annotation.
+	if injection.PinnedDeviceMemLimit(cfg.Limit, injection.DeviceCount(visibleDevices)) != "" && !env[injection.EnvMPSPinnedDeviceMemLimit] {
+		missing = append(missing, "env:"+injection.EnvMPSPinnedDeviceMemLimit)
+	}
+	if hasComputeCap && !env[injection.EnvMPSActiveThreadPercentage] {
+		missing = append(missing, "env:"+injection.EnvMPSActiveThreadPercentage)
 	}
 	if !hasMount(container.GetMounts(), expectedMountSource, expectedMountDestination) {
 		missing = append(missing, "mount:"+expectedMountSource+":"+expectedMountDestination)

@@ -77,6 +77,23 @@ spec:
                       0 means unlimited. Default: 0.
                     format: int32
                     type: integer
+                  mpsDrainSocketPath:
+                    description: |-
+                      mpsDrainSocketPath is the host path of the unix socket mpsd serves its
+                      MPS client-drain endpoint on. fractiond calls it from its StopContainer
+                      hook to drain a container's MPS clients before the runtime kills them,
+                      which is what keeps a killed-mid-kernel client from wedging the MPS
+                      server for every other tenant of the GPU. Must match mpsDaemon.drainSocketPath.
+                      Default: /var/run/gpu-fractioning/drain/mpsd.sock. Set to "" to disable
+                      the drain call.
+                    type: string
+                  mpsDrainTimeout:
+                    description: |-
+                      mpsDrainTimeout bounds how long StopContainer waits for mpsd to drain the
+                      container's MPS clients. The hook always lets the stop proceed when it
+                      expires — a slow drain delays a container stop, it never blocks it.
+                      Default: 15s.
+                    type: string
                   nriSocketPath:
                     description: |-
                       nriSocketPath is the path to the NRI Unix socket used to communicate
@@ -92,6 +109,77 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  resources:
+                    description: |-
+                      resources overrides the compute resources of the fractiond container.
+                      Merged over the built-in defaults, so setting only limits.memory keeps
+                      the default requests.
+
+                      claims is rejected rather than ignored: the type carries it, but a claim
+                      entry has to name an entry in the pod's spec.resourceClaims, which the
+                      operator builds and never populates. Accepting it would silently drop it.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'resources.claims is not supported: the operator builds
+                        the daemon pod spec and never populates spec.resourceClaims,
+                        so a claim entry could not resolve'
+                      rule: '!has(self.claims) || size(self.claims) == 0'
                   retroactiveEnforcement:
                     default: true
                     description: |-
@@ -156,6 +244,73 @@ spec:
                     description: 'path is the HTTP path on which metrics are served.
                       Default: /metrics.'
                     type: string
+                  resources:
+                    description: |-
+                      resources overrides the compute resources of the metricsd container.
+                      Merged over the built-in defaults. claims is rejected, see
+                      FractioningAgentSpec.Resources.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'resources.claims is not supported: the operator builds
+                        the daemon pod spec and never populates spec.resourceClaims,
+                        so a claim entry could not resolve'
+                      rule: '!has(self.claims) || size(self.claims) == 0'
                   volumeMounts:
                     description: |-
                       volumeMounts are additional volume mounts to add to the metricsd container.
@@ -2142,6 +2297,20 @@ spec:
                       backoff is the initial delay before restarting the MPS daemon after a crash.
                       Doubles on each failure, capped at 60s. Default: 5s.
                     type: string
+                  clientDrainTimeout:
+                    description: |-
+                      clientDrainTimeout bounds how long mpsd waits for a single MPS client to
+                      finish draining after it is terminated. Exceeding it is treated as a
+                      wedged server and escalates to an MPS restart. Default: 30s.
+                    type: string
+                  drainSocketPath:
+                    description: |-
+                      drainSocketPath is the host path of the unix socket mpsd serves its MPS
+                      client-drain endpoint on, and the path fractiond calls. Must match
+                      fractioningAgent.mpsDrainSocketPath. Default:
+                      /var/run/gpu-fractioning/drain/mpsd.sock. Set to "" to disable the
+                      endpoint (and with it the drain-before-kill protection).
+                    type: string
                   gracefulStopDelay:
                     description: |-
                       gracefulStopDelay is how long to wait after sending "quit" to the MPS daemon
@@ -2158,6 +2327,84 @@ spec:
                       0 means unlimited. Default: 0.
                     format: int32
                     type: integer
+                  recycleWhenIdle:
+                    description: |-
+                      recycleWhenIdle restarts the MPS control daemon once the last MPS client
+                      on the node disconnects through a drain. An MPS server that lost a client
+                      mid-kernel keeps an unconsumed fault that hangs every future client, and
+                      the only recovery is an MPS restart; bouncing it while no client is
+                      attached makes that recovery free. Default: true.
+                    type: boolean
+                  resources:
+                    description: |-
+                      resources overrides the compute resources of the mpsd container. The
+                      built-in default is sized for a node with up to 8 GPUs: the MPS control
+                      daemon holds a CUDA server context per GPU, each costing roughly 50 MiB
+                      of host memory. Raise limits.memory on nodes with more GPUs than that.
+                      Merged over the built-in defaults. claims is rejected, see
+                      FractioningAgentSpec.Resources.
+                    properties:
+                      claims:
+                        description: |-
+                          Claims lists the names of resources, defined in spec.resourceClaims,
+                          that are used by this container.
+
+                          This field depends on the
+                          DynamicResourceAllocation feature gate.
+
+                          This field is immutable. It can only be set for containers.
+                        items:
+                          description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                          properties:
+                            name:
+                              description: |-
+                                Name must match the name of one entry in pod.spec.resourceClaims of
+                                the Pod where this field is used. It makes that resource available
+                                inside a container.
+                              type: string
+                            request:
+                              description: |-
+                                Request is the name chosen for a request in the referenced claim.
+                                If empty, everything from the claim is made available, otherwise
+                                only the result of this request.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Limits describes the maximum amount of compute resources allowed.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: |-
+                          Requests describes the minimum amount of compute resources required.
+                          If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                          otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                          More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                        type: object
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'resources.claims is not supported: the operator builds
+                        the daemon pod spec and never populates spec.resourceClaims,
+                        so a claim entry could not resolve'
+                      rule: '!has(self.claims) || size(self.claims) == 0'
                   stableThreshold:
                     description: |-
                       stableThreshold is how long the MPS daemon must run to be considered stable.

@@ -4,6 +4,7 @@
 package mpsd
 
 import (
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -21,8 +22,9 @@ const (
 	defaultMPSPipeDir = "/run/nvidia-mps"
 	defaultMPSLogDir  = "/var/log/nvidia-mps"
 
-	volumeMPSPipe = "mps-pipe"
-	volumeMPSLog  = "mps-log"
+	volumeMPSPipe   = "mps-pipe"
+	volumeMPSLog    = "mps-log"
+	volumeDrainSock = "mps-drain"
 
 	envNodeName       = "NODE_NAME"
 	envVisibleDevices = "NVIDIA_VISIBLE_DEVICES"
@@ -30,9 +32,19 @@ const (
 
 	// Resource requests/limits for the mpsd container. See daemonmgr.DaemonResources
 	// for the requests-plus-memory-limit rationale.
+	//
+	// The memory limit is sized by GPU count, not by mpsd itself: the MPS control
+	// daemon mpsd supervises holds one CUDA server context per GPU on the node,
+	// and each costs roughly 50 MiB of host memory. The old 256Mi ran out around
+	// the sixth context on an 8-GPU node, and the failure was silent in the worst
+	// way — the CUDA allocation failed before the kernel could OOM-kill anything,
+	// so the pod exited 1 with CUDA_ERROR_OUT_OF_MEMORY while every GPU sat idle,
+	// reading like a GPU-memory problem rather than a pod-memory one. 1Gi covers
+	// a 16-GPU node with headroom; larger nodes raise it via
+	// spec.mpsDaemon.resources.
 	mpsdCPURequest = "50m"
-	mpsdMemRequest = "64Mi"
-	mpsdMemLimit   = "256Mi"
+	mpsdMemRequest = "128Mi"
+	mpsdMemLimit   = "1Gi"
 
 	// defaultGracefulStopDelay mirrors mpsd's supervisor.DefaultGracefulStopDelay
 	// (60s). It lives in a separate module, so it is duplicated here — keep in
@@ -161,7 +173,10 @@ func (d *daemon) buildContainer(image daemonmgr.ImageSpec) (corev1.Container, []
 		Args:            d.buildArgs(),
 		ReadinessProbe:  mpsControlSocketProbe,
 		LivenessProbe:   mpsLivenessProbe,
-		Resources:       daemonmgr.DaemonResources(mpsdCPURequest, mpsdMemRequest, mpsdMemLimit),
+		Resources: daemonmgr.ResolveDaemonResources(
+			daemonmgr.DaemonResources(mpsdCPURequest, mpsdMemRequest, mpsdMemLimit),
+			d.resourceOverrides(),
+		),
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      volumeMPSPipe,
@@ -195,13 +210,52 @@ func (d *daemon) buildContainer(image daemonmgr.ImageSpec) (corev1.Container, []
 		},
 	}
 
+	// The drain socket's directory (not the socket itself) is mounted, because
+	// mpsd creates the socket at startup: a HostPathType Socket mount would make
+	// the kubelet refuse to start the pod that is supposed to create it.
+	if socketPath := d.drainSocketPath(); socketPath != "" {
+		socketDir := filepath.Dir(socketPath)
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      volumeDrainSock,
+			MountPath: socketDir,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: volumeDrainSock,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: socketDir,
+					Type: &hostPathDirOrCreate,
+				},
+			},
+		})
+	}
+
 	return container, volumes
+}
+
+// drainSocketPath is the effective --drain-socket value: the CRD override when
+// set (including an explicit "" that disables the endpoint), the shared default
+// otherwise.
+func (d *daemon) drainSocketPath() string {
+	if d.spec != nil && d.spec.DrainSocketPath != nil {
+		return *d.spec.DrainSocketPath
+	}
+	return daemonmgr.DefaultMPSDrainSocketPath
+}
+
+// resourceOverrides returns the CRD resource override for the mpsd container,
+// or nil when none is set.
+func (d *daemon) resourceOverrides() *corev1.ResourceRequirements {
+	if d.spec == nil {
+		return nil
+	}
+	return d.spec.Resources
 }
 
 func (d *daemon) buildArgs() []string {
 	spec := d.spec
 	if spec == nil {
-		return nil
+		return []string{"--drain-socket", d.drainSocketPath()}
 	}
 
 	var args []string
@@ -220,6 +274,16 @@ func (d *daemon) buildArgs() []string {
 	}
 	if spec.GracefulStopDelay != nil {
 		args = append(args, "--graceful-stop-delay", spec.GracefulStopDelay.Duration.String())
+	}
+	// Always passed: an explicit "" is the documented way to turn the drain
+	// endpoint off, and that is indistinguishable from "unset" once the flag is
+	// omitted.
+	args = append(args, "--drain-socket", d.drainSocketPath())
+	if spec.RecycleWhenIdle != nil {
+		args = append(args, "--recycle-when-idle="+strconv.FormatBool(*spec.RecycleWhenIdle))
+	}
+	if spec.ClientDrainTimeout != nil {
+		args = append(args, "--client-drain-timeout", spec.ClientDrainTimeout.Duration.String())
 	}
 
 	return args

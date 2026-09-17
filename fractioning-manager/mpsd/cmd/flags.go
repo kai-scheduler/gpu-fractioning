@@ -9,6 +9,7 @@ import (
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/drain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
 )
 
@@ -38,6 +39,13 @@ type cliFlags struct {
 	stableThreshold time.Duration
 	// gracefulStopDelay is the time to wait for SIGTERM before SIGKILL.
 	gracefulStopDelay time.Duration
+	// drainSocket is the unix socket the MPS client-drain endpoint is served
+	// on; empty disables the endpoint.
+	drainSocket string
+	// clientDrainTimeout bounds one MPS client's terminate-and-drain.
+	clientDrainTimeout time.Duration
+	// recycleWhenIdle restarts MPS once a drain leaves no clients attached.
+	recycleWhenIdle bool
 }
 
 func parseFlags() cliFlags {
@@ -78,6 +86,15 @@ func parseFlags() cliFlags {
 	flag.DurationVar(&f.gracefulStopDelay, "graceful-stop-delay",
 		env.Duration("MPS_GRACEFUL_STOP_DELAY", internal.DefaultGracefulStopDelay),
 		"time to wait for SIGTERM before SIGKILL on shutdown")
+	flag.StringVar(&f.drainSocket, "drain-socket",
+		env.String("MPS_DRAIN_SOCKET", drain.DefaultSocketPath),
+		"unix socket serving the MPS client-drain endpoint fractiond calls before a container stops (empty disables)")
+	flag.DurationVar(&f.clientDrainTimeout, "client-drain-timeout",
+		env.Duration("MPS_CLIENT_DRAIN_TIMEOUT", drain.DefaultClientDrainTimeout),
+		"how long to wait for one MPS client to drain; exceeding it is treated as a wedged MPS server")
+	flag.BoolVar(&f.recycleWhenIdle, "recycle-when-idle",
+		env.Bool("MPS_RECYCLE_WHEN_IDLE", true),
+		"restart the MPS daemon once a drain leaves no MPS clients attached, so a fault cannot outlive the workload that caused it")
 	flag.Parse()
 	return f
 }

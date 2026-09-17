@@ -73,6 +73,8 @@ spec:
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address=:8081
+            - --min-gpu-operator-version={{ .Values.gpuOperator.minimumVersion }}
+            - --mark-nodes-unknown-on-shutdown={{ .Values.markNodesUnknownOnShutdown }}
             {{- if .Values.metrics.enabled }}
             - --metrics-bind-address=:{{ .Values.metrics.port }}
             # Plain HTTP: the metricsd GPU metrics are already unsecured and KAI

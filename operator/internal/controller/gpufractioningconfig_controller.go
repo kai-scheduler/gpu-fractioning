@@ -120,6 +120,7 @@ func NewGpuFractioningConfigReconciler(
 	mpsdAuditLog bool,
 	supportSMSharing bool,
 	fipsOnly bool,
+	minGPUOperatorVersion string,
 ) *GpuFractioningConfigReconciler {
 	return &GpuFractioningConfigReconciler{
 		Client:                   c,
@@ -132,7 +133,7 @@ func NewGpuFractioningConfigReconciler(
 		MpsdAuditLog:             mpsdAuditLog,
 		SupportSMSharing:         supportSMSharing,
 		FIPSOnly:                 fipsOnly,
-		GpuOperatorChecker:       NewGpuOperatorDependencyChecker(apiReader),
+		GpuOperatorChecker:       NewGpuOperatorDependencyChecker(apiReader, minGPUOperatorVersion),
 		GpuDriverChecker:         NewGpuDriverDependencyChecker(apiReader),
 	}
 }
@@ -548,6 +549,25 @@ func podFailureReason(pod *corev1.Pod) string {
 	default:
 		return "NotReady"
 	}
+}
+
+// MarkNodesUnavailable flips the gpu-fractioning Ready condition to Unknown on
+// every node the CR targets. It is called during operator shutdown, after the
+// manager has stopped, so it takes its own client and reader rather than using
+// the (already stopped) cached ones.
+//
+// A missing CR or CRD means there is nothing this operator was asserting about
+// any node, so both are success, not failure.
+func MarkNodesUnavailable(ctx context.Context, c client.Client, reader client.Reader) error {
+	var config v1alpha1.GpuFractioningConfig
+	if err := reader.Get(ctx, types.NamespacedName{Name: defaultGpuFractioningConfigName}, &config); err != nil {
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("reading GpuFractioningConfig for shutdown node marking: %w", err)
+	}
+
+	return daemonmgr.MarkNodeConditionsUnknown(ctx, reader, c, config.Spec.NodeSelector)
 }
 
 // SetupWithManager sets up the controller with the Manager.

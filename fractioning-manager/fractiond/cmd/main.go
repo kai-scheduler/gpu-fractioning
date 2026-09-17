@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/nri/pkg/stub"
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/audit"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
@@ -41,6 +42,18 @@ func main() {
 		logger.Info("retroactive enforcement enabled", "criSocket", flags.criSocket, "stopTimeout", flags.stopTimeout)
 	}
 
+	// The drain-before-stop call to mpsd. Without it, a fractional container
+	// killed with GPU work in flight can leave the whole GPU's MPS server
+	// unusable for every other tenant — see the mpsdrain package.
+	var drainer internal.Drainer
+	if flags.mpsDrainSocket != "" {
+		drainer = mpsdrain.NewClient(flags.mpsDrainSocket, flags.mpsDrainTimeout, logger)
+		logger.Info("MPS drain before container stop enabled",
+			"socket", flags.mpsDrainSocket, "timeout", flags.mpsDrainTimeout)
+	} else {
+		logger.Warn("MPS drain before container stop disabled; a container killed with GPU work in flight can wedge MPS for every other tenant of its GPU")
+	}
+
 	plugin, err := internal.NewPlugin(internal.Config{
 		AnnotationPrefix:       flags.annotationPrefix,
 		MPSPipeDirectory:       flags.mpsPipeDir,
@@ -51,6 +64,8 @@ func main() {
 		LogPodEvents:           flags.logPodEvents,
 		Log:                    logger,
 		Readiness:              readyState,
+		Drainer:                drainer,
+		DrainTimeout:           flags.mpsDrainTimeout,
 	}, stopper)
 	if err != nil {
 		logger.Error("failed to create plugin", "error", err)
@@ -113,6 +128,13 @@ func runWithRetry(ctx context.Context, logger *slog.Logger, plugin *internal.Plu
 		if err != nil {
 			return fmt.Errorf("creating NRI stub: %w", err)
 		}
+
+		// Hand the plugin this connection's NRI request timeout. The runtime
+		// kills the plugin connection when a hook overruns it, so every
+		// blocking call a hook makes has to be bounded by it; the value is only
+		// final after the Configure handshake, hence a function re-pointed at
+		// the fresh stub on each (re)connect rather than a number read once.
+		plugin.SetRequestTimeoutSource(s.RequestTimeout)
 
 		startTime := time.Now()
 		err = s.Run(ctx)

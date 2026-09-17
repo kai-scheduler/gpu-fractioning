@@ -13,6 +13,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 )
 
 const daemonSetPrefix = "gpu-fractioning"
@@ -58,6 +60,17 @@ func BaseDaemonSet(component, namespace string) *appsv1.DaemonSet {
 
 const daemonEphemeralStorageRequest = "100Mi"
 
+// DefaultMPSDrainSocketPath is the host path of the unix socket mpsd serves its
+// MPS client-drain endpoint on, and the path fractiond calls from its
+// StopContainer hook. It lives in a dedicated directory so the two daemons can
+// share it through a hostPath mount without also sharing the container->pod
+// mapping directory.
+//
+// It is an alias, not a literal, because the daemon binaries live in a
+// different Go module and default to the same path: a drift between the two
+// would leave the drain silently never happening. See the daemonpaths package.
+const DefaultMPSDrainSocketPath = daemonpaths.MPSDrainSocket
+
 // DaemonResources returns the resource requests and limits for a managed system
 // daemon container. CPU, memory and ephemeral-storage requests are always set so
 // the pods get a predictable QoS and the scheduler accounts for them; only a
@@ -75,6 +88,44 @@ func DaemonResources(cpuRequest, memRequest, memLimit string) corev1.ResourceReq
 			corev1.ResourceMemory: resource.MustParse(memLimit),
 		},
 	}
+}
+
+// ResolveDaemonResources merges a per-daemon CRD override over the built-in
+// defaults, entry by entry. A merge (rather than a replace) is what makes the
+// common case — "this node has more GPUs than the default memory limit was
+// sized for, raise limits.memory" — a one-line override that cannot
+// accidentally drop the CPU/ephemeral-storage requests the daemons rely on for
+// their QoS class. A nil override yields a copy of the defaults.
+func ResolveDaemonResources(defaults corev1.ResourceRequirements, override *corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if override == nil {
+		// Copied, not returned as-is: every daemon in a reconcile resolves
+		// against the same built-in defaults, so handing back the caller's maps
+		// would let one container's resources be edited through another's.
+		return *defaults.DeepCopy()
+	}
+
+	resolved := corev1.ResourceRequirements{
+		Requests: mergeResourceList(defaults.Requests, override.Requests),
+		Limits:   mergeResourceList(defaults.Limits, override.Limits),
+	}
+	return resolved
+}
+
+// mergeResourceList returns base with every entry of overlay applied on top.
+// The result is a fresh map so callers can never mutate the shared defaults.
+func mergeResourceList(base, overlay corev1.ResourceList) corev1.ResourceList {
+	if len(base) == 0 && len(overlay) == 0 {
+		return nil
+	}
+
+	merged := make(corev1.ResourceList, len(base)+len(overlay))
+	for name, quantity := range base {
+		merged[name] = quantity
+	}
+	for name, quantity := range overlay {
+		merged[name] = quantity
+	}
+	return merged
 }
 
 // PrivilegedSecurityContext returns a SecurityContext with privileged=true,

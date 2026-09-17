@@ -4,15 +4,19 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"os"
+	"time"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -81,7 +85,8 @@ func main() {
 	// and DaemonSet/dependency metadata events, not pod events. Only DaemonSets,
 	// the CR, and metadata for GPU Operator dependency resources — small, bounded
 	// object sets — are served from the default cache.
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		HealthProbeBindAddress: cfg.ProbeAddr,
@@ -154,6 +159,7 @@ func main() {
 		mpsdAuditLog,
 		supportSMSharing,
 		fipsOnly,
+		cfg.MinGPUOperatorVersion,
 	).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gpufractioningconfig")
 		os.Exit(1)
@@ -171,9 +177,63 @@ func main() {
 	}
 
 	// ── Start ────────────────────────────────────────────────────────────
-	setupLog.Info("Starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		setupLog.Error(err, "Failed to run manager")
+	setupLog.Info("Starting manager", "minGPUOperatorVersion", cfg.MinGPUOperatorVersion)
+	runErr := mgr.Start(ctrl.SetupSignalHandler())
+
+	// ── Shutdown ─────────────────────────────────────────────────────────
+	// Nothing else expires the per-node Ready condition, so an operator that
+	// just stops (scaled to zero, evicted, rolled) leaves every node asserting a
+	// readiness no one is maintaining. Hand that assertion back on the way out.
+	if cfg.MarkNodesUnknownOnShutdown {
+		markNodesUnavailable(restConfig, wasElected(mgr))
+	}
+
+	if runErr != nil {
+		setupLog.Error(runErr, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// shutdownMarkTimeout bounds the post-Start node marking. The pod's termination
+// grace period is what actually cuts us off, so this only has to be short
+// enough to leave room for the process to exit cleanly inside it.
+const shutdownMarkTimeout = 15 * time.Second
+
+// wasElected reports whether this manager ever won leader election. A manager
+// that never led was not the one maintaining the node conditions, so it must
+// not invalidate them on its way out — that would flap every node each time a
+// standby replica restarts. With leader election disabled the channel is closed
+// at startup, so a single-replica install always reports true.
+func wasElected(mgr ctrl.Manager) bool {
+	select {
+	case <-mgr.Elected():
+		return true
+	default:
+		return false
+	}
+}
+
+// markNodesUnavailable flips the gpu-fractioning Ready condition to Unknown on
+// every targeted node. It builds its own direct client: the manager has already
+// stopped by this point, so its cached client is no longer being served.
+func markNodesUnavailable(restConfig *rest.Config, elected bool) {
+	if !elected {
+		setupLog.Info("skipping shutdown node marking: this replica was never the leader")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownMarkTimeout)
+	defer cancel()
+
+	c, err := client.New(restConfig, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "Failed to build client for shutdown node marking")
+		return
+	}
+
+	if err := controller.MarkNodesUnavailable(ctx, c, c); err != nil {
+		setupLog.Error(err, "Failed to mark nodes unavailable on shutdown")
+		return
+	}
+	setupLog.Info("marked gpu-fractioning node conditions Unknown for shutdown")
 }

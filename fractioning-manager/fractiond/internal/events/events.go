@@ -20,6 +20,7 @@ package events
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
 )
@@ -28,6 +29,26 @@ import (
 // Sized well above realistic per-node container churn; a full queue causes the
 // incoming event to be dropped rather than blocking the NRI callback goroutine.
 const defaultQueueDepth = 10 * 1024
+
+// DefaultFlushTimeout bounds Flush. It exists because the two things Flush waits
+// on can both stop happening: the queue only drains while the worker is
+// progressing, and the worker's actual work is a write into the shared mapping
+// directory — a hostPath, which on a wedged filesystem blocks in uninterruptible
+// sleep and never returns. With the queue full behind a worker in that state,
+// an unbounded Flush never returns either.
+//
+// Both callers are places where that is much worse than losing the writes.
+// Plugin.Shutdown runs as an NRI request, and containerd's default
+// plugin_request_timeout is 2s; overrunning it is treated as fatal. The final
+// Flush in fractiond's main is the last thing before the process exits, so
+// blocking there leaves the pod in Terminating until kubelet SIGKILLs it. One
+// second sits inside the tighter of those two budgets with room for the rest of
+// the handler, and it is six orders of magnitude more than a healthy flush needs
+// (the worker is doing small local writes, and the barrier is a no-op marker).
+//
+// Giving up costs the last few mapping records, which metricsd re-derives from
+// the next NRI Synchronize. Not giving up costs the process.
+const DefaultFlushTimeout = time.Second
 
 // adapter produces the mapping for a single container. It is run on the worker
 // goroutine, off the producer's hot path. ok is false when the event carries no
@@ -63,14 +84,20 @@ type Options struct {
 	// to emit a log line. It is read on the worker goroutine so it reflects the
 	// current value (e.g. a live config flag).
 	LogEvents func() bool
+
+	// FlushTimeout bounds Flush. Zero or negative uses DefaultFlushTimeout.
+	// Production leaves it unset; it is injectable so a test can prove the
+	// bound exists without waiting out the real one.
+	FlushTimeout time.Duration
 }
 
 // Processor applies events to storage on a single background goroutine.
 type Processor struct {
-	writer    store.Writer
-	log       *slog.Logger
-	logEvents func() bool
-	queue     chan item
+	writer       store.Writer
+	log          *slog.Logger
+	logEvents    func() bool
+	queue        chan item
+	flushTimeout time.Duration
 }
 
 // item is a queued event or a flush barrier (done != nil).
@@ -86,11 +113,16 @@ func NewProcessor(writer store.Writer, logger *slog.Logger, opts Options) *Proce
 	if logger == nil {
 		logger = slog.Default()
 	}
+	flushTimeout := opts.FlushTimeout
+	if flushTimeout <= 0 {
+		flushTimeout = DefaultFlushTimeout
+	}
 	p := &Processor{
-		writer:    writer,
-		log:       logger,
-		logEvents: opts.LogEvents,
-		queue:     make(chan item, defaultQueueDepth),
+		writer:       writer,
+		log:          logger,
+		logEvents:    opts.LogEvents,
+		queue:        make(chan item, defaultQueueDepth),
+		flushTimeout: flushTimeout,
 	}
 	go p.run()
 	return p
@@ -140,12 +172,40 @@ func (p *Processor) enqueue(it item) {
 	}
 }
 
-// Flush blocks until every event queued so far has been applied. Used by
-// graceful shutdown and tests; it is a no-op marker in the event stream.
+// Flush blocks until every event queued so far has been applied, or until its
+// budget runs out. Used by graceful shutdown and tests; it is a no-op marker in
+// the event stream.
+//
+// The budget is a single one covering both halves of the wait — getting the
+// barrier into the queue, and the worker reaching it — rather than one each,
+// because the caller's real constraint is the total time it may spend here, and
+// two budgets would let a half-stalled processor consume twice it. See
+// DefaultFlushTimeout for why giving up is the right answer.
 func (p *Processor) Flush() {
+	timer := time.NewTimer(p.flushTimeout)
+	defer timer.Stop()
+
 	done := make(chan struct{})
-	p.queue <- item{done: done}
-	<-done
+	select {
+	case p.queue <- item{done: done}:
+	case <-timer.C:
+		// The queue never had room, which means the worker has not consumed an
+		// event for as long as it took to fill it: it is stuck inside a write,
+		// not merely behind.
+		p.log.Warn("gave up queueing a mapping flush barrier; the event worker is not draining the queue",
+			"timeout", p.flushTimeout, "queuedEvents", len(p.queue), "queueCapacity", cap(p.queue))
+		return
+	}
+
+	select {
+	case <-done:
+	case <-timer.C:
+		// The barrier is queued but unreached, so everything ahead of it is
+		// still unwritten. Name the backlog: it is the difference between "one
+		// slow write" and "the mapping directory is gone".
+		p.log.Warn("gave up waiting for a mapping flush to complete; mapping records queued before this point may be lost",
+			"timeout", p.flushTimeout, "unappliedEvents", len(p.queue), "queueCapacity", cap(p.queue))
+	}
 }
 
 func (p *Processor) run() {

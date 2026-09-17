@@ -17,28 +17,26 @@ spec:
   {{- if hasKey .Values "runtimeClassName" }}
   runtimeClassName: {{ .Values.runtimeClassName | quote }}
   {{- end }}
-  # Present (even if empty) so the API server applies field-level defaults such
-  # as fractioningAgent.retroactiveEnforcement=true.
-  {{- if and .Values.fractioningAgent .Values.fractioningAgent.logLevel }}
+  {{- /*
+    Each daemon stanza is passed through verbatim rather than field by field.
+    Enumerating fields here means every CRD field added later is silently
+    unreachable from values until someone remembers to add it too — which is how
+    `--set fractioningAgent.nriSocketPath=...` came to be accepted by Helm and
+    then dropped on the floor, on exactly the distributions (microk8s, k3s)
+    whose socket paths make that field necessary.
+
+    fractioningAgent is rendered even when empty, so the API server applies its
+    field-level defaults such as retroactiveEnforcement=true.
+  */}}
+  {{- with .Values.fractioningAgent }}
   fractioningAgent:
-    logLevel: {{ .Values.fractioningAgent.logLevel | quote }}
+    {{- toYaml . | nindent 4 }}
   {{- else }}
   fractioningAgent: {}
   {{- end }}
   metricsAgent:
-    enabled: {{ .Values.metricsAgent.enabled }}
-    {{- if .Values.metricsAgent.logLevel }}
-    logLevel: {{ .Values.metricsAgent.logLevel | quote }}
-    {{- end }}
-    {{- with .Values.metricsAgent.metricNames }}
-    metricNames:
-      {{- toYaml . | nindent 6 }}
-    {{- end }}
-    {{- if .Values.metricsAgent.volumes }}
-    volumes:
-      {{- toYaml .Values.metricsAgent.volumes | nindent 6 }}
-    {{- end }}
-    {{- if .Values.metricsAgent.volumeMounts }}
-    volumeMounts:
-      {{- toYaml .Values.metricsAgent.volumeMounts | nindent 6 }}
-    {{- end }}
+    {{- toYaml .Values.metricsAgent | nindent 4 }}
+  {{- with .Values.mpsDaemon }}
+  mpsDaemon:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
