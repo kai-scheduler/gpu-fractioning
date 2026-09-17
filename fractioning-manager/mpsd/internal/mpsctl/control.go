@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,14 +33,17 @@ const (
 	maxPID = 4 * 1024 * 1024
 )
 
-// pidPattern matches the standalone decimal runs in `client list` output.
-// Nothing about the surrounding format is assumed: the output is a
-// human-readable listing with no stability guarantee, so this deliberately
-// over-collects candidate PIDs and leaves it to the caller to decide which of
-// them belong to the container being drained. A number that is not a PID
-// therefore cannot cause a wrong client to be terminated — it simply matches
-// nothing.
-var pidPattern = regexp.MustCompile(`\b\d+\b`)
+// csvFormatArgs asks the control daemon for machine-readable output.
+//
+// This is not a preference, it is a correctness requirement. The default table
+// format truncates the PID column to fit its width: a client with PID 3165259
+// prints as "316...", and on a node where PIDs are 7 digits that is every
+// client. Parsing the table yields 316, which matches no process, so the drain
+// finds nothing to terminate and silently does nothing — the failure mode the
+// whole drain exists to prevent, reintroduced by the formatter. Verified
+// against nvidia-cuda-mps-control on driver 615: `client list` supports
+// --format=<table|csv>[,noheader], and the CSV form prints PIDs in full.
+var csvFormatArgs = []string{"--format=csv,noheader"}
 
 // Runner executes a command and returns its combined output. Production uses
 // execRunner; tests substitute a fake.
@@ -104,9 +107,10 @@ func New(opts Options) *Control {
 }
 
 // ClientPIDs returns every number the control daemon prints for `client list`,
-// as candidate client PIDs. See pidPattern for why this is deliberately loose.
+// as the PIDs of the clients currently attached.
 func (c *Control) ClientPIDs(ctx context.Context) ([]int, error) {
-	out, err := c.exec(ctx, c.timeout, "client", "list")
+	args := append([]string{"client", "list"}, csvFormatArgs...)
+	out, err := c.exec(ctx, c.timeout, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing MPS clients: %w", err)
 	}
@@ -190,8 +194,13 @@ func parsePIDs(out []byte) []int {
 	var pids []int
 	seen := map[int]struct{}{}
 
-	for _, match := range pidPattern.FindAll(out, -1) {
-		value, err := strconv.Atoi(string(match))
+	// One client per line, PID in the first CSV field. Reading that field
+	// rather than scanning the whole line for digits matters: the other
+	// columns carry a GPU UUID and a command name, both of which contain
+	// digit runs that would otherwise be collected as bogus PIDs.
+	for line := range strings.SplitSeq(string(out), "\n") {
+		field, _, _ := strings.Cut(strings.TrimSpace(line), ",")
+		value, err := strconv.Atoi(field)
 		if err != nil || value <= 0 || value > maxPID {
 			continue
 		}

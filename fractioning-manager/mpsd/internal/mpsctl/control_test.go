@@ -93,13 +93,12 @@ func TestParsePIDs(t *testing.T) {
 			want: []int{42},
 		},
 		{
-			// The regexp cannot see the sign, so "-5" over-collects as 5. That
-			// is safe only because drain intersects these candidates with the
-			// container's own PIDs — this test pins the over-collection so a
-			// future change that drops the intersection is caught here.
-			name: "a negative number over-collects as its magnitude",
+			// Reading the first CSV field rather than scanning for digit runs
+			// means a sign is part of the field and fails to parse, instead of
+			// being silently dropped to yield a positive PID that was never
+			// there.
+			name: "a negative number is not a PID",
 			out:  "-5\n",
-			want: []int{5},
 		},
 		{
 			name: "maxPID itself is still a plausible PID",
@@ -128,9 +127,8 @@ func TestParsePIDs(t *testing.T) {
 			out:  "abc123 pid456def 0x1F\n",
 		},
 		{
-			name: "a decimal splits into both halves",
+			name: "a decimal is not a PID",
 			out:  "12.34\n",
-			want: []int{12, 34},
 		},
 		{
 			name: "leading zeroes still parse",
@@ -181,13 +179,13 @@ func TestClientPIDsArgs(t *testing.T) {
 			// which drain would read as "nothing to drain".
 			name:        "control port is prefixed to every subcommand",
 			controlPort: "3",
-			want:        []string{"-p", "3", "client", "list"},
+			want:        []string{"-p", "3", "client", "list", "--format=csv,noheader"},
 		},
 		{
 			// A blank port is the documented escape hatch for dropping the flag.
 			name:        "empty control port omits -p entirely",
 			controlPort: "",
-			want:        []string{"client", "list"},
+			want:        []string{"client", "list", "--format=csv,noheader"},
 		},
 	}
 
@@ -244,7 +242,7 @@ func TestPrefixIsNotSharedBetweenCalls(t *testing.T) {
 		t.Fatalf("second ClientPIDs() error = %v", err)
 	}
 
-	wantList := []string{"-p", "3", "client", "list"}
+	wantList := []string{"-p", "3", "client", "list", "--format=csv,noheader"}
 	if got := rec.call(t, 0); !slices.Equal(got, wantList) {
 		t.Errorf("first argv = %v, want %v", got, wantList)
 	}
@@ -470,5 +468,33 @@ func TestNilLogDoesNotPanic(t *testing.T) {
 	}})
 	if _, err := c.ClientPIDs(context.Background()); err != nil {
 		t.Fatalf("ClientPIDs() error = %v", err)
+	}
+}
+
+// The bug this whole CSV format exists to avoid, pinned with output captured
+// verbatim from nvidia-cuda-mps-control on driver 615.
+//
+// `client list` in its default table format truncates the PID column to fit:
+// a client whose real PID is 3165259 prints as "316...". Parsed, that yields
+// 316 — a PID that belongs to no container, so the drain's intersection finds
+// no targets and terminates nothing. The drain reports success and silently
+// does not drain, which is exactly the orphaned-client wedge it was written to
+// prevent. Nothing about it is visible in a log.
+func TestParsePIDsRejectsTheTruncatedTableFormat(t *testing.T) {
+	table := "PID     SERVER        DEVICE                                         MAWS NS                   CMD\n" +
+		"316...  srv           GPU-cc97390c-c189-71f5-1bb7-5b0af481fa0d       srv/default (0)           VLLM::EngineCore\n" +
+		"316...  srv           GPU-cc97390c-c189-71f5-1bb7-5b0af481fa0d       srv/default (0)           VLLM::EngineCore\n"
+
+	if got := parsePIDs([]byte(table)); len(got) != 0 {
+		t.Errorf("parsePIDs(table output) = %v, want none: a truncated PID must never be mistaken for a real one", got)
+	}
+
+	// The CSV form of the same two clients, also captured verbatim.
+	csv := "3167082,srv,GPU-cc97390c-c189-71f5-1bb7-5b0af481fa0d,srv/default (0),VLLM::EngineCore\n" +
+		"3165259,srv,GPU-cc97390c-c189-71f5-1bb7-5b0af481fa0d,srv/default (0),VLLM::EngineCore\n"
+
+	want := []int{3167082, 3165259}
+	if got := parsePIDs([]byte(csv)); !slices.Equal(got, want) {
+		t.Errorf("parsePIDs(csv output) = %v, want %v", got, want)
 	}
 }
