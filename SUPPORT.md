@@ -27,6 +27,11 @@ issues that include the information below get answered fastest.
 - `kubectl describe` output and logs from the relevant component (`operator`, `fractiond`, `mpsd`
   or `metricsd`), plus the `gpu-fractioning.nvidia.com/Ready` node condition of the affected node.
 
+## Release cadence
+
+Subsequent minor or major releases are driven by incoming feature requests and roadmap items. These
+are tracked as [GitHub issues](https://github.com/kai-scheduler/gpu-fractioning/issues).
+
 ## Supported versions
 
 Fixes land on `main` and ship in the next release. Only the most recent release is supported;
