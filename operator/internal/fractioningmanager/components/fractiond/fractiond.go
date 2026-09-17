@@ -102,6 +102,13 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 	// so metricsd can resolve NVML host PIDs through its own /proc.
 	podSpec.NodeSelector = opts.NodeSelector
 	podSpec.HostPID = true
+	// Without this the pod silently runs under the namespace's "default"
+	// ServiceAccount, which carries none of the daemon SA's imagePullSecrets —
+	// so on any cluster pulling from a private registry fractiond and metricsd
+	// cannot pull their images at all, while mpsd (which does set this) pulls
+	// fine. The asymmetry makes it look like an image problem rather than an
+	// identity one.
+	podSpec.ServiceAccountName = opts.ServiceAccountName
 
 	fractiondContainer, fractiondVolumes := d.buildFractiondContainer(opts)
 	podSpec.Volumes = append(podSpec.Volumes, fractiondVolumes...)
