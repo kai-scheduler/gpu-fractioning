@@ -11,8 +11,8 @@ It is designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler
 1. A cluster admin installs the operator and a `GpuFractioningConfig` custom resource is created (the Helm chart ships a default one).
 2. The **operator** (controller) reconciles the CR and rolls out the node-level components as DaemonSets to the selected GPU nodes.
 3. **mpsd** runs an NVIDIA MPS control daemon on each node with per-process GPU memory accounting (`memacct`) enabled, plus a parameterless shared MPS server (`context-share`) that `sm-sharing` containers can opt into (see below) instead of the default per-node MPS socket.
-4. **fractiond** registers as an NRI plugin with the container runtime. When a pod carrying GPU-memory annotations is created, fractiond injects `NVIDIA_GPU_MEMORY_REQUEST` / `NVIDIA_GPU_MEMORY_LIMIT` into the container **before it starts**, along with an MPS pipe mount — by default (`time-slicing`) to mpsd's default per-node socket, or, for a container annotated `gpu-compute.mode: sm-sharing`, to mpsd's shared MPS server instead, so its GPU **compute** (not just memory) is shared via MPS with other `sm-sharing` containers.
-5. The NVIDIA driver enforces `NVIDIA_GPU_MEMORY_LIMIT` as a hard cap, so a container cannot allocate beyond its share and impact its neighbors on the same GPU. A container that exceeds its limit is terminated (out-of-memory), the same way a container exceeding its Kubernetes memory limit is. fractiond injects the same cap a second way, as MPS's own `CUDA_MPS_PINNED_DEVICE_MEM_LIMIT`, so memory stays enforced on clusters whose container toolkit predates the CDI hook. Where the scheduler also recorded a compute portion, `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` caps the container's SM occupancy to match — so "half a GPU" means half the compute, not just half the memory.
+4. **fractiond** registers as an NRI plugin with the container runtime. When a pod carrying GPU-memory annotations is created, fractiond injects `NVIDIA_GPU_MEMORY_REQUEST` / `NVIDIA_GPU_MEMORY_LIMIT` into the container **before it starts**, along with an MPS pipe mount — by default (`time-slicing`) to mpsd's default per-node socket, or, for a container annotated `gpu-compute.mode: sm-sharing`, to its own capped namespace on mpsd's shared MPS server instead, so its GPU **compute** (not just memory) is shared via MPS with other `sm-sharing` containers and bounded by the portion the scheduler charged it for.
+5. The NVIDIA driver enforces `NVIDIA_GPU_MEMORY_LIMIT` as a hard cap, so a container cannot allocate beyond its share and impact its neighbors on the same GPU. A container that exceeds its limit is terminated (out-of-memory), the same way a container exceeding its Kubernetes memory limit is. fractiond injects the same cap a second way, as MPS's own `CUDA_MPS_PINNED_DEVICE_MEM_LIMIT`, so memory stays enforced on clusters whose container toolkit predates the CDI hook. Where the scheduler also recorded a compute portion, an `sm-sharing` container gets an MPS namespace of its own, capped at that portion by MPS itself — so "half a GPU" means half the compute, not just half the memory, and the container cannot raise the cap from inside itself (see [Capping compute](#capping-compute)).
 6. **metricsd** (a sidecar alongside fractiond) exports per-pod GPU memory and utilization metrics for the shared GPUs.
 
 ## Architecture
@@ -181,7 +181,7 @@ annotations:
 ```
 
 - **`time-slicing`** (the default; same as omitting the annotation) — compute is shared via GPU time-slicing (the driver schedules processes in turns) against mpsd's default per-node MPS server. This is today's behavior.
-- **`sm-sharing`** — compute is shared via MPS itself (concurrent SM occupancy): fractiond routes the container to mpsd's shared MPS server instead. `sm-sharing` only makes sense alongside a GPU-memory annotation (above), since it changes how compute is shared, not memory.
+- **`sm-sharing`** — compute is shared via MPS itself (concurrent SM occupancy): fractiond routes the container to its own namespace on mpsd's shared MPS server instead. `sm-sharing` only makes sense alongside a GPU-memory annotation (above), since it changes how compute is shared, not memory. It is also the only mode in which a compute cap is applied — see [Capping compute](#capping-compute).
 - Any other value fails container creation (or falls back to `time-slicing` if fractiond is running fail-open).
 
 ### Capping compute
@@ -199,17 +199,90 @@ annotations:
   nvidia.com/container.trainer.gpu-compute.portion: "0.5"
 ```
 
-fractiond turns it into `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` (`0.5` → `50`), which
-MPS enforces against the container's clients. It applies in both compute modes:
-under `time-slicing` it caps the container's own MPS server, under `sm-sharing`
-it caps its share of the server it shares with its neighbours.
+fractiond turns it into a whole percentage (`0.5` → `50`, rounded **down**, with
+a floor of 1) and asks mpsd to provision the container an MPS namespace of its
+own, capped at that percentage. The container is bind-mounted **only** that
+namespace's pipe directory, so every CUDA context it opens is inside the capped
+namespace.
+
+**The cap applies only in `sm-sharing` mode.** A per-namespace active-thread
+percentage is a hard partition of the SMs, not a share of them: a container
+capped at 50% cannot use the other half even when the card is idle. That is
+what `sm-sharing` means and the opposite of what `time-slicing` promises, so a
+`time-slicing` container is never compute-capped, whatever its portion says.
+
+#### Why the namespace, and not the environment variable
+
+`CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` is still injected, but it is
+**informational**. Any process inside the container can re-export it before
+`cuInit`, so on its own it caps nobody. What enforces the cap is the namespace,
+which the container has no privilege to change. Measured on driver 615: with the
+namespace capped at 25%, a client exporting 100, 75 or 50 still got 25%; only a
+lower value (10) took effect. The rule is
+
+```
+effective share = min(the container's env var, the namespace's ceiling)
+```
+
+so a workload can voluntarily take less, and can never take more.
+
+Three things make that a boundary rather than a convention:
+
+- mpsd runs the MPS control daemon in **multiuser mode** (`-m`), which forces
+  every MPS server to be root-owned. Without it a server only accepts clients
+  whose uid matches its owner, which would make every pod the owner — and an
+  owner can change its own cap.
+- A non-owner uid attempting `namespace set`, `server set`, `namespace
+  create/delete` or `sm-partition create` is refused by the control daemon.
+- The container is mounted the **leaf namespace directory only**. Its parent,
+  the server directory, carries the server's `default` namespace, which is
+  uncapped; mpsd additionally caps `default` itself as defence in depth, since
+  nothing is routed there.
+
+SM partitions are deliberately *not* used. They are exact and hardware-enforced,
+but `CUDA_MPS_SM_PARTITION` is chosen by the client and is not validated against
+the namespace — a container in a 40-SM namespace was measured taking a 136-SM
+partition — so they cannot be a security boundary.
+
+**Known gap:** any uid can run `namespace list`, `server list` or `sm-partition
+list --all` through its own namespace socket and read every other tenant's cap
+and pipe path. That is information disclosure only; no mutation is possible from
+a non-owner uid.
+
+#### Lifecycle
+
+The cap has to be set before the container's first CUDA process exists, because
+`namespace set` fails once a client is attached — so provisioning happens in
+fractiond's NRI `CreateContainer` hook. **Changing a running pod's portion
+therefore requires restarting it**; mpsd reports the mismatch rather than
+silently leaving the old cap in place.
+
+If the namespace cannot be provisioned, the container is **not created**, even
+under `--fail-open`: `--fail-open` is about malformed annotations, whereas this
+is the enforcement plane being unavailable, and starting the container anyway
+would put an uncapped tenant on a shared GPU.
+
+mpsd reconciles namespaces every time the MPS control daemon starts. A restart
+of that daemon destroys every namespace while the containers using them keep
+running, so reconciliation recreates them under the same names — and therefore
+at the same pipe directories those containers are already mounted to — and
+deletes the ones no live container claims. Namespaces are released on container
+removal, after the MPS drain, and retried in the background while a client is
+still attached.
+
+Set `--namespace-isolation=false` (Helm/CRD `namespaceIsolation`) on both
+daemons to fall back to the previous behaviour: one shared socket, and the
+advisory environment variable alone. It exists as an escape hatch, not as a
+configuration to want.
 
 The annotation is **scheduler-owned**, like `gpus.devices`: it is a limit the
 workload is subject to, so a workload that could set it could exempt itself from
 it. KAI Scheduler's admission webhook rejects changes to it from anyone but the
 binder.
 
-Without the annotation there is no compute cap — the pre-existing behaviour.
+Without the annotation there is no compute cap — the pre-existing behaviour. An
+`sm-sharing` container with no portion still gets a namespace of its own, capped
+at 100%, which keeps the shared `default` namespace empty.
 
 ## `GpuFractioningConfig` reference
 

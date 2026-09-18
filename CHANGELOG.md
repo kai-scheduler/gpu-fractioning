@@ -7,18 +7,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
-- GPU **compute** limits, not just memory limits. A container whose pod carries
-  the new per-container annotation
+- GPU **compute** limits, not just memory limits, and they are now **enforced by
+  MPS rather than requested of the container**. A container whose pod carries
+  the per-container annotation
   `nvidia.com/container.<container-name>.gpu-compute.portion` (a GPU portion in
   `(0, 1]`, written by the scheduler at bind time from the portion it charged
-  the workload's quota for) now has `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` injected
-  alongside its memory limits, so MPS caps its SM occupancy to match. Without
-  it, `sm-sharing` let two containers occupy the SMs concurrently but put no
+  the workload's quota for) is given an MPS namespace of its own, created by
+  mpsd and capped at that portion with a per-namespace active-thread
+  percentage, and is bind-mounted only that namespace's pipe directory. Without
+  a cap, `sm-sharing` let two containers occupy the SMs concurrently but put no
   ceiling on either: a container holding half a GPU's memory could still take
-  all of its compute. The cap applies in both compute modes — under
-  `time-slicing` it bounds the container's own MPS server, under `sm-sharing`
-  its share of the shared one. Absent annotation means no cap, the pre-existing
+  all of its compute. Absent annotation means no cap, the pre-existing
   behaviour.
+
+  A per-namespace active-thread percentage is an authoritative ceiling:
+  measured on driver 615, a client in a namespace capped at 25% got 25% of the
+  SMs whether it exported `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` of 100, 75 or 50,
+  and only a lower value took effect. The effective share is
+  `min(client env, namespace ceiling)`, so a container can lower its own share
+  and can never raise it. `CUDA_MPS_ACTIVE_THREAD_PERCENTAGE` is still injected
+  but is now **informational only** — it was never enforceable on its own, since
+  any process in the container can re-export it before `cuInit`. The security
+  boundary rests on the control daemon running multiuser (`-m`), which forces
+  every MPS server to be root-owned and makes `namespace set` fail for a
+  non-owner uid.
+
+  mpsd reconciles namespaces on every start of the control daemon: it recreates
+  the namespaces running containers depend on (an MPS restart destroys them all)
+  and deletes the ones no live container claims, so neither an mpsd restart nor
+  an MPS recycle strands or loses one. It also caps the shared server's
+  `default` namespace as defence in depth, since nothing is routed there.
+
+  New toggles: `--namespace-isolation` on both daemons (default on; off falls
+  back to the previous shared-socket behaviour with the advisory env var alone),
+  and `--default-namespace-active-thread-percentage`,
+  `--namespace-state-path`, `--namespace-sweep-interval` and
+  `--namespace-orphan-grace` on mpsd.
+
+  **Known gap, not fixed:** any uid can run `namespace list`, `server list` or
+  `sm-partition list --all` through its own namespace socket and read every
+  other tenant's cap and pipe path. That is information disclosure only — no
+  mutation is possible from a non-owner uid.
 - Memory limits are now also enforced by MPS itself, via a
   `CUDA_MPS_PINNED_DEVICE_MEM_LIMIT` injected per assigned GPU. This
   deliberately duplicates the cap `NVIDIA_GPU_MEMORY_LIMIT` asks the container
@@ -130,6 +159,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The minimum supported NVIDIA GPU Operator version is now **v26.7.1** (was v26.7.0). A cluster running v26.7.0 is reported as unsupported on the `GpuFractioningConfig` `Ready` condition and the node-level daemons are not rolled out. Note that a ClusterPolicy labelled only `26.7` normalizes to `v26.7.0` and is therefore also rejected; label it with the full patch version.
 
 ### Fixed
+- The compute cap is no longer applied to `time-slicing` containers. It is a
+  hard partition of the SMs, not a share of them, so a lone `time-slicing`
+  tenant at portion `0.5` could no longer use the idle half of its own GPU —
+  contradicting what `time-slicing` means. The cap now applies only in
+  `sm-sharing` mode, where concurrent occupancy of disjoint SM sets is the whole
+  point.
+- The compute cap now respects the `--support-sm-sharing` chicken bit.
+  `ParseComputeMode` took it and `ParseComputePortion` did not, so
+  `--support-sm-sharing=false` — which removes the shared MPS server the cap is
+  enforced on — still left containers hard-capped, with no way to undo it short
+  of editing the scheduler's annotations.
+- The GPU portion is now converted to a percentage by flooring rather than
+  rounding to nearest. Rounding turned an eight-way split at `0.125` into 13%
+  per container, i.e. 104% of a card promised to its tenants; since the
+  percentage is a hard SM partition, that asks the driver to carve out SMs that
+  do not exist. Portions summing to at most one GPU now always produce
+  percentages summing to at most 100 (plus the deliberate 1% floor, which
+  exists because MPS reads 0 as "unlimited").
+- The MPS drain issued by fractiond's `StopContainer` hook could return without
+  ever issuing a terminate. `client list` was given the full 30s drain budget
+  while the hook's own budget is around a second, so one slow list consumed the
+  whole window before the terminate that actually stops a client submitting
+  work — reintroducing the mid-kernel kill the drain exists to prevent. The
+  container's PIDs are now resolved first (a local `/proc` scan that can end the
+  drain on its own), and the first `client list` attempt is bounded by a much
+  shorter budget, retried with the full one only if it expires.
 - mpsd could not start on a node with more than about five GPUs. Its container
   memory limit was hardcoded at 256Mi, but the MPS control daemon holds a CUDA
   server context per GPU at roughly 50 MiB of host memory each, so the sixth
