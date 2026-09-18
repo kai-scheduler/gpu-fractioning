@@ -18,6 +18,7 @@ import (
 	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 )
 
 const testDaemonServiceAccountName = "gpu-fractioning-daemon"
@@ -930,5 +931,118 @@ func TestMPSDrainSocketDefaultAgreesWithMpsd(t *testing.T) {
 	}
 	if fractiondVol.Path != mpsdVol.Path {
 		t.Errorf("fractiond mounts %q but mpsd mounts %q", fractiondVol.Path, mpsdVol.Path)
+	}
+}
+
+// TestDaemon_BuildDaemonSet_NVMLShimVolume covers the hostPath that makes the
+// shim work at all. fractiond stages the shadow libnvidia-ml.so.1 into
+// daemonpaths.NVMLShimDir inside its own container; unless that path is a
+// hostPath, the library lands in the pod's ephemeral filesystem and the bind
+// mount fractiond hands every GPU container points at a host directory that
+// does not exist.
+func TestDaemon_BuildDaemonSet_NVMLShimVolume(t *testing.T) {
+	tests := []struct {
+		name string
+		spec *v1alpha1.FractioningAgentSpec
+		// wantMounted is whether the host directory must be available to the pod.
+		wantMounted bool
+		// wantArg is the flag the daemon must receive; "" means none at all.
+		wantArg string
+	}{
+		{
+			// No fractioningAgent block at all. The default lives in the binary,
+			// not in the CRD schema, so there is no field for the API server to
+			// default and the volume has to be there regardless.
+			name:        "nil spec still mounts the staging directory",
+			spec:        nil,
+			wantMounted: true,
+		},
+		{
+			name:        "unset field leaves the binary default in force",
+			spec:        &v1alpha1.FractioningAgentSpec{},
+			wantMounted: true,
+		},
+		{
+			name:        "explicitly enabled",
+			spec:        &v1alpha1.FractioningAgentSpec{NVMLShim: ptr.To(true)},
+			wantMounted: true,
+			wantArg:     "--nvml-shim=true",
+		},
+		{
+			name:        "explicitly disabled",
+			spec:        &v1alpha1.FractioningAgentSpec{NVMLShim: ptr.To(false)},
+			wantMounted: false,
+			wantArg:     "--nvml-shim=false",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds := NewFractiondDaemon(tt.spec, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+			ctr := containerByName(t, ds.Spec.Template.Spec.Containers, daemonName)
+
+			vol := hostPathVolume(ds.Spec.Template.Spec.Volumes, volumeNVMLShim)
+			mountPath, mounted := mountPathFor(ctr.VolumeMounts, volumeNVMLShim)
+
+			if !tt.wantMounted {
+				if vol != nil {
+					t.Errorf("shim volume present with the feature disabled: %+v", vol)
+				}
+				if mounted {
+					t.Errorf("shim mount present with the feature disabled: %q", mountPath)
+				}
+			} else {
+				if vol == nil {
+					t.Fatalf("shim volume %q not found in %v", volumeNVMLShim, ds.Spec.Template.Spec.Volumes)
+				}
+				if vol.Path != daemonpaths.NVMLShimDir {
+					t.Errorf("shim volume path = %q, want %q", vol.Path, daemonpaths.NVMLShimDir)
+				}
+				// DirectoryOrCreate, and the directory rather than the file: the
+				// library does not exist on a fresh node, and creating it is the
+				// job, so a file-typed hostPath could never start.
+				if vol.Type == nil || *vol.Type != corev1.HostPathDirectoryOrCreate {
+					t.Errorf("shim volume type = %v, want %q", vol.Type, corev1.HostPathDirectoryOrCreate)
+				}
+				if !mounted {
+					t.Fatalf("shim mount %q not found in %v", volumeNVMLShim, ctr.VolumeMounts)
+				}
+				if mountPath != daemonpaths.NVMLShimDir {
+					t.Errorf("shim mount path = %q, want %q", mountPath, daemonpaths.NVMLShimDir)
+				}
+				// Read-write, unlike the workload side: this is the pod that
+				// writes the library.
+				if !hasMount(ctr.VolumeMounts, volumeNVMLShim, daemonpaths.NVMLShimDir, false) {
+					t.Errorf("shim mount is read-only; fractiond cannot stage into it: %v", ctr.VolumeMounts)
+				}
+			}
+
+			flagged := ""
+			for _, a := range ctr.Args {
+				if strings.HasPrefix(a, "--nvml-shim=") {
+					flagged = a
+				}
+			}
+			if flagged != tt.wantArg {
+				t.Errorf("--nvml-shim arg = %q, want %q (args = %v)", flagged, tt.wantArg, ctr.Args)
+			}
+		})
+	}
+}
+
+// TestNVMLShimDirAgreesWithTheDaemon pins the operator's mount path to the same
+// constant fractiond stages to. A mismatch is silent in both directions: the
+// pod starts, the daemon reports a successful copy, and the only symptom is
+// nvidia-smi inside fractional containers going on reporting the whole GPU.
+func TestNVMLShimDirAgreesWithTheDaemon(t *testing.T) {
+	ds := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{}, nil, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+	ctr := containerByName(t, ds.Spec.Template.Spec.Containers, daemonName)
+
+	path, ok := mountPathFor(ctr.VolumeMounts, volumeNVMLShim)
+	if !ok {
+		t.Fatalf("shim mount %q not found in %v", volumeNVMLShim, ctr.VolumeMounts)
+	}
+	if path != daemonpaths.NVMLShimDir {
+		t.Errorf("the operator mounts %q but fractiond stages to %q", path, daemonpaths.NVMLShimDir)
 	}
 }

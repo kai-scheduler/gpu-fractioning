@@ -121,6 +121,15 @@ spec:
                         mpsDrainTimeout bounds how long StopContainer waits for the
                         drain. Expiry never blocks the container stop. Default: 15s.
                       type: string
+                    nvmlShim:
+                      description: >-
+                        nvmlShim controls whether fractiond stages a shadow
+                        libnvidia-ml.so.1 onto the node and bind-mounts it into
+                        GPU-fractioning containers ahead of the driver's own copy on
+                        LD_LIBRARY_PATH. Without it the caps are still enforced but
+                        invisible to NVML, so nvidia-smi inside a fractional container
+                        reports the whole physical GPU. Default: true.
+                      type: boolean
                     resources:
                       properties:
                         claims:

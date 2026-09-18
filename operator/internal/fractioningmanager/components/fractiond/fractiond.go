@@ -11,6 +11,7 @@ import (
 
 	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -34,6 +35,7 @@ const (
 	volumeMapDir    = "map-dir"
 	volumeCRISocket = "cri-socket"
 	volumeDrainSock = "mps-drain"
+	volumeNVMLShim  = "nvml-shim"
 
 	// defaultReadinessPort must match the fractiond binary's default
 	// (fractioning-manager/fractiond): it serves /readyz on --readiness-port. Used
@@ -315,6 +317,37 @@ func (d *daemon) buildFractiondContainer(opts daemonmgr.BuildOptions) (corev1.Co
 		})
 	}
 
+	// The host directory fractiond stages its shadow libnvidia-ml.so.1 into and
+	// then bind-mounts into every GPU-fractioning container. Read-write, unlike
+	// the workload side: this pod is the one that writes the library.
+	//
+	// DirectoryOrCreate so the first fractiond pod on a fresh node has somewhere
+	// to stage to, and the directory again rather than the file: a file-typed
+	// hostPath would have to exist before the pod starts, which it cannot, since
+	// creating it is the whole job.
+	//
+	// Mounted whenever the shim is not explicitly disabled, including when there
+	// is no fractioningAgent block at all, because the binary defaults the
+	// feature on. Omitting the volume while the binary still stages would put
+	// the library inside the pod's own filesystem and leave workload containers
+	// bind-mounting a host path that does not exist.
+	if d.nvmlShimEnabled() {
+		dirType := corev1.HostPathDirectoryOrCreate
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      volumeNVMLShim,
+			MountPath: daemonpaths.NVMLShimDir,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: volumeNVMLShim,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: daemonpaths.NVMLShimDir,
+					Type: &dirType,
+				},
+			},
+		})
+	}
+
 	// The MPS drain endpoint mpsd serves. Same directory-not-socket mount
 	// rationale as the CRI socket above, with an extra reason: mpsd creates this
 	// socket, and on a fresh node fractiond can easily start first.
@@ -512,6 +545,12 @@ func (d *daemon) buildArgs() []string {
 	if spec.MPSDrainTimeout != nil {
 		args = append(args, "--mps-drain-timeout", spec.MPSDrainTimeout.Duration.String())
 	}
+	// Passed only when the CR says something about it. The binary defaults the
+	// shim on, so an unset field already means "enabled" — and passing nothing
+	// keeps a fractiond image predating the flag from refusing to start.
+	if spec.NVMLShim != nil {
+		args = append(args, "--nvml-shim="+strconv.FormatBool(*spec.NVMLShim))
+	}
 	args = append(args, "--retroactive-enforcement="+strconv.FormatBool(spec.RetroactiveEnforcement))
 	// Override the CRI socket path used to stop containers during enforcement.
 	if spec.CRISocketPath != "" {
@@ -548,6 +587,15 @@ func (d *daemon) nriSocketDir() string {
 // leaves it off, mirroring metricsEnabled.
 func (d *daemon) retroactiveEnforcementEnabled() bool {
 	return d.fractioningSpec != nil && d.fractioningSpec.RetroactiveEnforcement
+}
+
+// nvmlShimEnabled reports whether the NVML shim host directory must be mounted
+// into the fractiond pod. Unlike retroactiveEnforcementEnabled, a nil spec
+// means enabled: that default lives in the binary rather than in the CRD
+// schema, so it applies to a CR with no fractioningAgent block at all, where
+// the API server has no field to default.
+func (d *daemon) nvmlShimEnabled() bool {
+	return d.fractioningSpec == nil || d.fractioningSpec.NVMLShim == nil || *d.fractioningSpec.NVMLShim
 }
 
 // criSocketPath returns the CRI runtime socket path fractiond uses to stop

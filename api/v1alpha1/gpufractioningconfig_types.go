@@ -125,6 +125,16 @@ type FractioningAgentSpec struct {
 	// +optional
 	MPSDrainTimeout *metav1.Duration `json:"mpsDrainTimeout,omitempty"`
 
+	// nvmlShim controls whether fractiond stages a shadow libnvidia-ml.so.1 onto
+	// the node and bind-mounts it into GPU-fractioning containers, ahead of the
+	// driver's own copy on LD_LIBRARY_PATH. Without it, the compute and memory
+	// caps are still enforced, but they are invisible to NVML: nvidia-smi inside
+	// a fractional container reports the whole physical GPU and the memory every
+	// co-tenant is using. Set to false to turn the shim off and keep that
+	// reporting behaviour. Default: true.
+	// +optional
+	NVMLShim *bool `json:"nvmlShim,omitempty"`
+
 	// resources overrides the compute resources of the fractiond container.
 	// Merged over the built-in defaults, so setting only limits.memory keeps
 	// the default requests.

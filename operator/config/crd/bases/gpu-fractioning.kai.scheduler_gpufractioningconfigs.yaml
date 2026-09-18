@@ -99,6 +99,16 @@ spec:
                       nriSocketPath is the path to the NRI Unix socket used to communicate
                       with the container runtime (containerd/CRI-O). Default: /var/run/nri/nri.sock.
                     type: string
+                  nvmlShim:
+                    description: |-
+                      nvmlShim controls whether fractiond stages a shadow libnvidia-ml.so.1 onto
+                      the node and bind-mounts it into GPU-fractioning containers, ahead of the
+                      driver's own copy on LD_LIBRARY_PATH. Without it, the compute and memory
+                      caps are still enforced, but they are invisible to NVML: nvidia-smi inside
+                      a fractional container reports the whole physical GPU and the memory every
+                      co-tenant is using. Set to false to turn the shim off and keep that
+                      reporting behaviour. Default: true.
+                    type: boolean
                   readinessPort:
                     description: |-
                       readinessPort is the port fractiond serves its /readyz endpoint on. When set,
