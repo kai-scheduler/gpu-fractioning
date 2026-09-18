@@ -1,0 +1,16 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# NVML entry points nvmlshim.c implements itself, one per line. Everything in
+# symbols.txt that is not listed here gets a forwarding trampoline.
+#
+# Keeping the list in a file rather than inside the generator means a mismatch
+# between it and the C source is a duplicate-symbol link error, which is the
+# failure mode we want: the alternative — the generator emitting a trampoline
+# for a symbol C also defines, or neither defining it — would be silent.
+#
+# Every version of a capped call has to be listed. nvidia-smi on driver
+# 615.71.09 calls _v2, but pynvml and DCGM builds in the wild still call the
+# unversioned entry point, and an uncapped one of those leaks the real total.
+nvmlDeviceGetMemoryInfo
+nvmlDeviceGetMemoryInfo_v2
