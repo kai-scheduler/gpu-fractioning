@@ -2635,6 +2635,75 @@ func TestSMSharingContainerIsMountedOnlyItsOwnNamespaceDirectory(t *testing.T) {
 	}
 }
 
+// TestSMSharingContainerGetsBothTheNamespaceMountAndTheShim covers the seam
+// between the two features that both adjust a container's mounts and both
+// landed separately: the MPS namespace that enforces the compute cap, and the
+// NVML shim that makes nvidia-smi report the pod's own slice.
+//
+// Neither feature's own tests exercise the other: the namespace tests run with
+// no shim directory configured and assert exactly one mount, and the shim tests
+// run on a memory-only pod that never reaches the namespace path. A regression
+// where one overwrote the other's mounts, or where the shim's LD_LIBRARY_PATH
+// merge clobbered the pipe directory env, would pass both suites.
+func TestSMSharingContainerGetsBothTheNamespaceMountAndTheShim(t *testing.T) {
+	prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir, namespace: "kai_abc123_0011223344"}
+	p := newProvisioningPlugin(t, prov, Config{
+		SupportSMSharing: true,
+		NVMLShimHostDir:  daemonpaths.NVMLShimDir,
+	})
+
+	pod := &api.PodSandbox{
+		Name:      "test-pod",
+		Namespace: "team-a",
+		Annotations: map[string]string{
+			limitAnnotation:   "4Gi",
+			devicesAnnotation: "GPU-abc123",
+			portionAnnotation: "0.25",
+			modeAnnotation:    "sm-sharing",
+		},
+	}
+	ctr := &api.Container{Id: "container-id", Name: "trainer"}
+
+	adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+
+	pipe := mountTo(adj, configuration.ContainerMPSPipeDirectory)
+	if pipe == nil {
+		t.Fatalf("the MPS pipe mount is gone; mounts = %+v", adj.GetMounts())
+	}
+	if pipe.GetSource() != testNamespacePipeDir {
+		t.Errorf("pipe mount source = %q, want the leaf namespace dir %q", pipe.GetSource(), testNamespacePipeDir)
+	}
+
+	shim := mountTo(adj, injection.ContainerNVMLShimDir)
+	if shim == nil {
+		t.Fatalf("the NVML shim mount is gone; mounts = %+v", adj.GetMounts())
+	}
+	if shim.GetSource() != daemonpaths.NVMLShimDir {
+		t.Errorf("shim mount source = %q, want %q", shim.GetSource(), daemonpaths.NVMLShimDir)
+	}
+
+	if len(adj.GetMounts()) != 2 {
+		t.Errorf("expected exactly the namespace pipe and shim mounts, got %+v", adj.GetMounts())
+	}
+
+	// The cap and the shim must both still reach the container: the shim's
+	// LD_LIBRARY_PATH handling must not disturb the pipe directory or the
+	// advisory percentage, and vice versa.
+	entries := adjustmentEnv(adj)
+	if got := valueOfAdd(entries, injection.EnvMPSPipeDirectory); got != configuration.ContainerMPSPipeDirectory {
+		t.Errorf("%s = %q, want %q", injection.EnvMPSPipeDirectory, got, configuration.ContainerMPSPipeDirectory)
+	}
+	if got := valueOfAdd(entries, injection.EnvMPSActiveThreadPercentage); got != "25" {
+		t.Errorf("%s = %q, want %q", injection.EnvMPSActiveThreadPercentage, got, "25")
+	}
+	if got := valueOfAdd(entries, injection.EnvLDLibraryPath); !strings.Contains(got, injection.ContainerNVMLShimDir) {
+		t.Errorf("%s = %q, want it to contain %q", injection.EnvLDLibraryPath, got, injection.ContainerNVMLShimDir)
+	}
+}
+
 // TestSMSharingWithNoPortionIsStillGivenItsOwnNamespace.
 //
 // A container with no annotated portion asked for no cap, which is 100% — not a
