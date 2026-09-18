@@ -18,9 +18,12 @@ import (
 
 func TestDetectorViolations(t *testing.T) {
 	tests := []struct {
-		name        string
-		pod         *api.PodSandbox
-		ctr         *api.Container
+		name string
+		pod  *api.PodSandbox
+		ctr  *api.Container
+		// detector overrides the default fail-closed, sm-sharing-enabled
+		// detector for the cases that are about a different configuration.
+		detector    *detector
 		wantMissing []string // nil ⇒ expect no violator
 	}{
 		{
@@ -129,23 +132,58 @@ func TestDetectorViolations(t *testing.T) {
 			wantMissing: []string{"env:" + injection.EnvMPSPinnedDeviceMemLimit},
 		},
 		{
+			// The compute cap is expected only in sm-sharing mode, so this and
+			// the case below are annotated for it.
 			name: "missing MPS compute cap (portion annotated) is a violator",
-			pod:  withComputePortion(fractioningPod("p", "pod", "trainer", "4Gi", ""), "trainer", "0.5"),
+			pod:  smSharingPod("p", "pod", "trainer", "4Gi", "0.5"),
 			ctr: &api.Container{
 				Id: "c", Name: "trainer", PodSandboxId: "p",
 				State:  api.ContainerState_CONTAINER_RUNNING,
-				Env:    injectedEqualEnv(),
-				Mounts: []*api.Mount{mpsMount()},
+				Env:    sharedSocketEqualEnv(),
+				Mounts: []*api.Mount{sharedSocketMount()},
 			},
 			wantMissing: []string{"env:" + injection.EnvMPSActiveThreadPercentage},
 		},
 		{
 			name: "compute cap injected is not a violator",
-			pod:  withComputePortion(fractioningPod("p", "pod", "trainer", "4Gi", ""), "trainer", "0.5"),
+			pod:  smSharingPod("p", "pod", "trainer", "4Gi", "0.5"),
 			ctr: &api.Container{
 				Id: "c", Name: "trainer", PodSandboxId: "p",
 				State:  api.ContainerState_CONTAINER_RUNNING,
-				Env:    append(injectedEqualEnv(), injection.EnvMPSActiveThreadPercentage+"=50"),
+				Env:    append(sharedSocketEqualEnv(), injection.EnvMPSActiveThreadPercentage+"=50"),
+				Mounts: []*api.Mount{sharedSocketMount()},
+			},
+		},
+		{
+			// The time-slicing exemption, audited. The portion is annotated and
+			// the container carries no compute cap, which used to be a
+			// violation — and stopping the container over it would have been
+			// worse than pointless, since the create hook that recreated it
+			// would (correctly) not inject one either, leaving kubelet and the
+			// audit to restart the pod forever.
+			name: "a time-slicing container is not expected to carry a compute cap",
+			pod:  withComputePortion(withVisibleDevices(fractioningPod("p", "pod", "trainer", "4Gi", ""), "trainer", "GPU-abc123"), "trainer", "0.5"),
+			ctr: &api.Container{
+				Id: "c", Name: "trainer", PodSandboxId: "p",
+				State: api.ContainerState_CONTAINER_RUNNING,
+				Env: append(injectedEqualEnv(),
+					pinnedMemLimitEnv(1),
+					injection.EnvVisibleDevices+"=GPU-abc123"),
+				Mounts: []*api.Mount{mpsMount()},
+			},
+		},
+		{
+			// The kill switch, audited. With sm-sharing disabled cluster-wide
+			// the create hook rejects the mode annotation outright, so the
+			// container the audit sees was created under fail-open as a
+			// time-slicing one — and, as above, is owed no compute cap.
+			name:     "sm-sharing disabled means no compute cap is expected",
+			detector: ptr(newDetectorFailOpenSMSharingDisabled()),
+			pod:      smSharingPod("p", "pod", "trainer", "4Gi", "0.5"),
+			ctr: &api.Container{
+				Id: "c", Name: "trainer", PodSandboxId: "p",
+				State:  api.ContainerState_CONTAINER_RUNNING,
+				Env:    injectedEqualEnv(),
 				Mounts: []*api.Mount{mpsMount()},
 			},
 		},
@@ -232,15 +270,15 @@ func TestDetectorViolations(t *testing.T) {
 			// audit, and the create hook is the only thing standing between a
 			// tenant and a value of its choosing.
 			name: "a present but wrong cap value is not a violation",
-			pod:  withComputePortion(withVisibleDevices(fractioningPod("p", "pod", "trainer", "4Gi", ""), "trainer", "GPU-abc123"), "trainer", "0.25"),
+			pod:  withVisibleDevices(smSharingPod("p", "pod", "trainer", "4Gi", "0.25"), "trainer", "GPU-abc123"),
 			ctr: &api.Container{
 				Id: "c", Name: "trainer", PodSandboxId: "p",
 				State: api.ContainerState_CONTAINER_RUNNING,
-				Env: append(injectedEqualEnv(),
+				Env: append(sharedSocketEqualEnv(),
 					injection.EnvMPSPinnedDeviceMemLimit+"=0=999999M",
 					injection.EnvMPSActiveThreadPercentage+"=100",
 					injection.EnvVisibleDevices+"=all"),
-				Mounts: []*api.Mount{mpsMount()},
+				Mounts: []*api.Mount{sharedSocketMount()},
 			},
 		},
 		{
@@ -394,7 +432,11 @@ func TestDetectorViolations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newDetector().violators(
+			d := newDetector()
+			if tt.detector != nil {
+				d = *tt.detector
+			}
+			got := d.violators(
 				[]*api.PodSandbox{tt.pod},
 				[]*api.Container{tt.ctr},
 			)
@@ -626,6 +668,15 @@ var (
 	sharedMountMissing  = "mount:" + filepath.Join(configuration.DefaultMPSPipeDirectory, configuration.SharedMPSSocketPath) + ":" + configuration.ContainerMPSPipeDirectory
 )
 
+// smSharingPod is a fractioning pod whose container is annotated for
+// sm-sharing with a compute portion — the only shape in which a compute cap is
+// expected at all.
+func smSharingPod(id, name, containerName, limit, portion string) *api.PodSandbox {
+	return withComputePortion(
+		withComputeMode(fractioningPod(id, name, containerName, limit, ""), containerName, "sm-sharing"),
+		containerName, portion)
+}
+
 // sharedSocketMount is the mount buildAdjustment produces for an sm-sharing
 // container: the shared server's default-namespace socket on the host, bound
 // to the fixed in-container MPS pipe path.
@@ -671,6 +722,9 @@ func newDetectorFailOpen() detector {
 	d.failOpen = true
 	return d
 }
+
+// ptr is the usual address-of helper for a table entry that needs one.
+func ptr(d detector) *detector { return &d }
 
 func newDetectorFailOpenSMSharingDisabled() detector {
 	d := newDetectorFailOpen()

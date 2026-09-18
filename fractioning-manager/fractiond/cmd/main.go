@@ -48,12 +48,25 @@ func main() {
 	// killed with GPU work in flight can leave the whole GPU's MPS server
 	// unusable for every other tenant — see the mpsdrain package.
 	var drainer internal.Drainer
+	var provisioner internal.Provisioner
 	if flags.mpsDrainSocket != "" {
-		drainer = mpsdrain.NewClient(flags.mpsDrainSocket, flags.mpsDrainTimeout, logger)
+		// One client for all three calls: they share a socket, a timeout and a
+		// deployment, and two clients pointed at the same place would only be a
+		// second thing to get wrong.
+		client := mpsdrain.NewClient(flags.mpsDrainSocket, flags.mpsDrainTimeout, logger)
+		drainer = client
 		logger.Info("MPS drain before container stop enabled",
 			"socket", flags.mpsDrainSocket, "timeout", flags.mpsDrainTimeout)
+
+		if flags.namespaceIsolation {
+			provisioner = client
+			logger.Info("per-container MPS namespace isolation enabled; sm-sharing containers get a compute cap MPS enforces",
+				"socket", flags.mpsDrainSocket)
+		} else {
+			logger.Warn("per-container MPS namespace isolation disabled; an sm-sharing container's compute cap is only the CUDA_MPS_ACTIVE_THREAD_PERCENTAGE env var, which anything inside the container can re-export before cuInit")
+		}
 	} else {
-		logger.Warn("MPS drain before container stop disabled; a container killed with GPU work in flight can wedge MPS for every other tenant of its GPU")
+		logger.Warn("the mpsd endpoint is not configured; a container killed with GPU work in flight can wedge MPS for every other tenant of its GPU, and sm-sharing containers get no enforceable compute cap")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -71,6 +84,7 @@ func main() {
 		Log:                    logger,
 		Readiness:              readyState,
 		Drainer:                drainer,
+		Provisioner:            provisioner,
 		DrainTimeout:           flags.mpsDrainTimeout,
 	}, stopper)
 	if err != nil {

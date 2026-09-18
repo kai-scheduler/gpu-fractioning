@@ -41,9 +41,10 @@ const (
 	// computePortionSuffix builds the per-container compute-portion annotation
 	// key, e.g. "nvidia.com/container.trainer.gpu-compute.portion". The
 	// scheduler writes it at bind time from the GPU portion it charged the
-	// workload's quota for; fractiond turns it into the MPS active-thread
-	// percentage that caps the container's SM occupancy. Same single-key shape
-	// as computeModeSuffix.
+	// workload's quota for; fractiond turns it into the active-thread
+	// percentage of the MPS namespace it has mpsd provision for the container,
+	// which is what caps the container's SM occupancy. Same single-key shape as
+	// computeModeSuffix.
 	computePortionSuffix = "gpu-compute.portion"
 
 	// bytesPerMiB is the number of bytes in one MiB.
@@ -236,8 +237,9 @@ func ParseComputeMode(annotations map[string]string, containerName, prefix strin
 }
 
 // ParseComputePortion extracts the share of a GPU's compute a container is
-// entitled to, as the whole-percent value NVIDIA MPS takes in
-// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE.
+// entitled to, as the whole-percent value NVIDIA MPS takes for a per-namespace
+// active-thread percentage (and, informationally, in
+// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE).
 //
 // Annotation format:
 //
@@ -249,12 +251,35 @@ func ParseComputeMode(annotations map[string]string, containerName, prefix strin
 // the rounding decision in one place: MPS only accepts whole percents, and the
 // driver rounds whatever it gets up to SM granularity anyway.
 //
-// Returns found=false when the annotation is absent, which the caller treats as
-// "no compute cap for this container" — the pre-existing behaviour, where a
-// fractional container's memory was capped but its kernels could still occupy
-// every SM on the card. A present-but-unusable value is an error, never a
-// silent fall back to uncapped.
-func ParseComputePortion(annotations map[string]string, containerName, prefix string) (percent int, found bool, err error) {
+// The cap applies ONLY under ComputeModeSMSharing, and only when the cluster's
+// sm-sharing chicken bit is on. Both exclusions are load-bearing:
+//
+//   - mode. A per-namespace active-thread percentage is a hard partition of the
+//     SMs, not a share of them: a container capped at 50% cannot use the other
+//     half even when the card is otherwise idle. That is the right shape for
+//     sm-sharing, whose whole premise is concurrent occupancy of disjoint SM
+//     sets, and the wrong shape for time-slicing, which is documented as
+//     handing unused time to other workloads. Hard-capping a lone time-slicing
+//     tenant at its portion would silently halve a GPU nobody else is using.
+//   - smSharingEnabled. The enforcement mechanism — a per-container MPS
+//     namespace on mpsd's shared server — only exists when sm-sharing is
+//     enabled cluster-wide, and ParseComputeMode already rejects the
+//     sm-sharing annotation when it is not. Reading the portion anyway would
+//     leave containers hard-capped by a feature that is switched off, with no
+//     way to turn the cap back off short of editing the scheduler's
+//     annotations.
+//
+// A malformed value is an error in every mode: the annotation is
+// scheduler-written, so a value that cannot be parsed means something upstream
+// is broken and must be reported, not silently ignored because this particular
+// container would not have been capped anyway.
+//
+// Returns found=false when the annotation is absent, or when the cap does not
+// apply for one of the reasons above. The caller treats that as "no compute cap
+// for this container" — the pre-existing behaviour, where a fractional
+// container's memory was capped but its kernels could still occupy every SM on
+// the card.
+func ParseComputePortion(annotations map[string]string, containerName, prefix string, mode ComputeMode, smSharingEnabled bool) (percent int, found bool, err error) {
 	key := containerComputePortionAnnotationKey(prefix, containerName)
 	raw, ok := annotations[key]
 	if !ok {
@@ -269,14 +294,37 @@ func ParseComputePortion(annotations map[string]string, containerName, prefix st
 		return 0, false, fmt.Errorf("parsing annotation %q: GPU portion %q is out of range, expected a value in (0, 1]", key, raw)
 	}
 
-	// Round to nearest, then floor at 1: a portion small enough to round to 0
-	// would otherwise become "0%", which MPS reads as "no limit" — the exact
-	// opposite of what a tiny request asked for.
-	percent = int(math.Round(portion * 100))
+	if !smSharingEnabled || mode != ComputeModeSMSharing {
+		return 0, false, nil
+	}
+
+	return ComputePercent(portion), true, nil
+}
+
+// ComputePercent converts a GPU portion in (0, 1] to the whole-percent
+// active-thread percentage MPS takes.
+//
+// It rounds DOWN, then floors at 1. Both halves matter, and in opposite
+// directions:
+//
+//   - Down, not to nearest. The percentages handed to N co-tenants of one GPU
+//     have to stay within the card: rounding 0.125 to nearest gives 13%, and
+//     eight containers sharing a GPU eight ways would then be promised 104% of
+//     it. Because a per-namespace percentage is a hard SM partition, over-
+//     subscribing it is not merely optimistic accounting — it is asking the
+//     driver to carve out more SMs than exist. Flooring keeps the sum of any
+//     set of portions that sums to ≤ 1 at or under 100%.
+//   - Floored at 1, never 0. MPS reads an active-thread percentage of 0 as "no
+//     limit", so the smallest requests would become the only uncapped ones.
+//     The floor costs at most 1% of over-subscription per container, which is
+//     bounded by the number of containers on the card and is the lesser evil
+//     by a wide margin.
+func ComputePercent(portion float64) int {
+	percent := int(math.Floor(portion * 100))
 	if percent < 1 {
 		percent = 1
 	}
-	return percent, true, nil
+	return percent
 }
 
 // quantityToMemoryMiB converts a Kubernetes Quantity string to the integer MiB

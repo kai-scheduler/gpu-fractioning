@@ -181,7 +181,13 @@ func (p *Processor) enqueue(it item) {
 // because the caller's real constraint is the total time it may spend here, and
 // two budgets would let a half-stalled processor consume twice it. See
 // DefaultFlushTimeout for why giving up is the right answer.
-func (p *Processor) Flush() {
+//
+// It reports whether the flush completed. Production callers ignore that (there
+// is nothing useful to do about it beyond the warning logged here), but a test
+// that reads the mapping directory afterwards must not mistake "the flush timed
+// out" for "nothing was recorded" — that difference is the whole gap between a
+// real failure and a machine that was busy.
+func (p *Processor) Flush() bool {
 	timer := time.NewTimer(p.flushTimeout)
 	defer timer.Stop()
 
@@ -194,17 +200,19 @@ func (p *Processor) Flush() {
 		// not merely behind.
 		p.log.Warn("gave up queueing a mapping flush barrier; the event worker is not draining the queue",
 			"timeout", p.flushTimeout, "queuedEvents", len(p.queue), "queueCapacity", cap(p.queue))
-		return
+		return false
 	}
 
 	select {
 	case <-done:
+		return true
 	case <-timer.C:
 		// The barrier is queued but unreached, so everything ahead of it is
 		// still unwritten. Name the backlog: it is the difference between "one
 		// slow write" and "the mapping directory is gone".
 		p.log.Warn("gave up waiting for a mapping flush to complete; mapping records queued before this point may be lost",
 			"timeout", p.flushTimeout, "unappliedEvents", len(p.queue), "queueCapacity", cap(p.queue))
+		return false
 	}
 }
 

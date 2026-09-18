@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/containerd/nri/pkg/api"
 
@@ -27,6 +28,23 @@ func memAnnotations(container, limit string) map[string]string {
 	return map[string]string{annotations.LimitAnnotationKey(testMemPrefix, container): limit}
 }
 
+// testFlushTimeout is the flush budget these tests give the event processor.
+//
+// Production uses events.DefaultFlushTimeout (1s), which is chosen for a
+// shutdown path that must not hold an NRI callback open and is six orders of
+// magnitude more than a healthy flush needs. In a test it measures something
+// else entirely: how loaded the machine running the test is. Under a full
+// parallel `go test ./...` the barrier can miss a 1s deadline, Flush gives up,
+// the mapping directory is read before the writes land, and the test fails with
+// "expected one recorded mapping, got 0" — a failure about CPU contention
+// wearing the costume of a correctness bug.
+//
+// The budget is raised rather than removed so a genuinely stuck processor still
+// fails instead of hanging until the go test timeout, and activeContainers
+// asserts the flush actually completed, so exceeding even this is reported as
+// what it is rather than as missing data.
+const testFlushTimeout = 2 * time.Minute
+
 // testMappingPlugin builds a plugin whose mapping handoff goes through a
 // throwaway directory, plus a reader over the same directory so a test can
 // observe what the metrics sidecar would read back.
@@ -38,19 +56,27 @@ func testMappingPlugin(t *testing.T) (*Plugin, *fsstore.Reader) {
 		AnnotationPrefix: testMemPrefix,
 		MPSPipeDirectory: "/run/nvidia-mps",
 		MapDir:           dir,
+		FlushTimeout:     testFlushTimeout,
 		Log:              log,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewPlugin: %v", err)
 	}
+	flushBeforeCleanup(t, p)
 	return p, fsstore.NewReader(dir, log)
 }
 
 // activeContainers drains queued events and returns the containers the metrics
 // sidecar would attribute processes to.
+//
+// The flush result is asserted rather than ignored: without it, a flush that
+// timed out and a mapping that was never recorded are indistinguishable at the
+// call site, and every caller here reads the directory immediately afterwards.
 func activeContainers(t *testing.T, p *Plugin, r *fsstore.Reader) []store.ContainerInfo {
 	t.Helper()
-	p.Flush()
+	if !p.Flush() {
+		t.Fatalf("the mapping flush did not complete within %v; the event processor is stuck", testFlushTimeout)
+	}
 	return r.ActiveContainers()
 }
 

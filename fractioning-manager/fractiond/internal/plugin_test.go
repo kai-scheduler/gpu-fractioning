@@ -495,12 +495,33 @@ func newTestPlugin(t *testing.T) *Plugin {
 		FailOpen:         false,
 		SupportSMSharing: true,
 		MapDir:           t.TempDir(),
+		FlushTimeout:     testFlushTimeout,
 		Log:              log,
 	}, nil)
 	if err != nil {
 		t.Fatalf("NewPlugin: %v", err)
 	}
+	flushBeforeCleanup(t, p)
 	return p
+}
+
+// flushBeforeCleanup drains the plugin's mapping writes before the test's
+// temporary directories are removed.
+//
+// CreateContainer records the container→pod mapping on a background worker,
+// deliberately: the NRI hot path must never block on a filesystem write. A test
+// that returns without draining it therefore leaves a write racing t.TempDir's
+// RemoveAll, which surfaces as "TempDir RemoveAll cleanup: directory not empty"
+// — a failure in whichever test happened to lose the race, with nothing in it
+// pointing at the mapping worker. Cleanups run last-registered-first and
+// t.TempDir registered its own before this one, so this always runs first.
+func flushBeforeCleanup(t *testing.T, p *Plugin) {
+	t.Helper()
+	t.Cleanup(func() {
+		if !p.Flush() {
+			t.Errorf("the mapping flush did not complete within %v; the event processor is stuck", testFlushTimeout)
+		}
+	})
 }
 
 // fakeStopper records the container IDs Synchronize asks to stop.
@@ -734,9 +755,13 @@ const (
 // the scheduler never assigned) caps the wrong hardware.
 func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 	tests := []struct {
-		name            string
-		annotations     map[string]string
-		wantEnv         map[string]string
+		name        string
+		annotations map[string]string
+		wantEnv     map[string]string
+		// wantAbsentEnv names keys the adjustment must NOT set. A cap that is
+		// deliberately not applied has to be asserted positively: "the map does
+		// not mention it" is also what a test that forgot to look would say.
+		wantAbsentEnv   []string
 		wantMountSource string
 		wantMountDest   string
 	}{
@@ -805,31 +830,38 @@ func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 		},
 		{
 			// The compute cap is what makes "half a GPU" mean half the SMs and
-			// not just half the memory.
+			// not just half the memory. It is scoped to sm-sharing: see
+			// "time-slicing is never compute-capped" below.
 			name: "compute portion becomes the MPS thread percentage",
 			annotations: map[string]string{
 				limitAnnotation:   "4Gi",
 				portionAnnotation: "0.5",
+				modeAnnotation:    "sm-sharing",
 			},
 			wantEnv: map[string]string{
 				injection.EnvGPUMemoryRequest:          "4096",
 				injection.EnvGPUMemoryLimit:            "4096",
 				injection.EnvMPSActiveThreadPercentage: "50",
-				injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+				injection.EnvMPSPipeDirectory:          configuration.ContainerMPSPipeDirectory,
 			},
+			wantMountSource: filepath.Join(configuration.DefaultMPSPipeDirectory, configuration.SharedMPSSocketPath),
+			wantMountDest:   configuration.ContainerMPSPipeDirectory,
 		},
 		{
 			name: "a whole-GPU portion is 100 percent",
 			annotations: map[string]string{
 				limitAnnotation:   "4Gi",
 				portionAnnotation: "1",
+				modeAnnotation:    "sm-sharing",
 			},
 			wantEnv: map[string]string{
 				injection.EnvGPUMemoryRequest:          "4096",
 				injection.EnvGPUMemoryLimit:            "4096",
 				injection.EnvMPSActiveThreadPercentage: "100",
-				injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+				injection.EnvMPSPipeDirectory:          configuration.ContainerMPSPipeDirectory,
 			},
+			wantMountSource: filepath.Join(configuration.DefaultMPSPipeDirectory, configuration.SharedMPSSocketPath),
+			wantMountDest:   configuration.ContainerMPSPipeDirectory,
 		},
 		{
 			// MPS reads 0 as "unlimited", so the smallest portion must floor at
@@ -838,13 +870,16 @@ func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 			annotations: map[string]string{
 				limitAnnotation:   "4Gi",
 				portionAnnotation: "0.001",
+				modeAnnotation:    "sm-sharing",
 			},
 			wantEnv: map[string]string{
 				injection.EnvGPUMemoryRequest:          "4096",
 				injection.EnvGPUMemoryLimit:            "4096",
 				injection.EnvMPSActiveThreadPercentage: "1",
-				injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+				injection.EnvMPSPipeDirectory:          configuration.ContainerMPSPipeDirectory,
 			},
+			wantMountSource: filepath.Join(configuration.DefaultMPSPipeDirectory, configuration.SharedMPSSocketPath),
+			wantMountDest:   configuration.ContainerMPSPipeDirectory,
 		},
 		{
 			// No portion annotated is the pre-existing world: memory capped,
@@ -860,9 +895,14 @@ func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 		},
 		{
 			// Memory enforcement must not depend on the compute mode. The two
-			// cases below are the same pod annotated for the two modes; only
-			// the MPS pipe location may differ between them.
-			name: "time-slicing gets both caps",
+			// cases below are the same pod annotated for the two modes; the MPS
+			// pipe location and the compute cap are the only differences.
+			//
+			// time-slicing gets the memory caps and NO compute cap, even with a
+			// portion annotated. The cap is a hard SM partition, so applying it
+			// here would stop a lone time-slicing tenant from using an idle
+			// card — the opposite of what time-slicing is for.
+			name: "time-slicing is never compute-capped",
 			annotations: map[string]string{
 				limitAnnotation:   "4Gi",
 				devicesAnnotation: "GPU-abc123",
@@ -870,13 +910,28 @@ func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 				modeAnnotation:    "time-slicing",
 			},
 			wantEnv: map[string]string{
-				injection.EnvGPUMemoryRequest:          "4096",
-				injection.EnvGPUMemoryLimit:            "4096",
-				injection.EnvMPSPinnedDeviceMemLimit:   "0=4096M",
-				injection.EnvMPSActiveThreadPercentage: "25",
-				injection.EnvVisibleDevices:            "GPU-abc123",
-				injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+				injection.EnvGPUMemoryRequest:        "4096",
+				injection.EnvGPUMemoryLimit:          "4096",
+				injection.EnvMPSPinnedDeviceMemLimit: "0=4096M",
+				injection.EnvVisibleDevices:          "GPU-abc123",
+				injection.EnvMPSPipeDirectory:        configuration.DefaultMPSPipeDirectory,
 			},
+			wantAbsentEnv: []string{injection.EnvMPSActiveThreadPercentage},
+		},
+		{
+			// The default mode is time-slicing, so an annotated portion with no
+			// mode is not capped either. This is the shape most pods have.
+			name: "a portion with no mode annotation is not compute-capped",
+			annotations: map[string]string{
+				limitAnnotation:   "4Gi",
+				portionAnnotation: "0.25",
+			},
+			wantEnv: map[string]string{
+				injection.EnvGPUMemoryRequest: "4096",
+				injection.EnvGPUMemoryLimit:   "4096",
+				injection.EnvMPSPipeDirectory: configuration.DefaultMPSPipeDirectory,
+			},
+			wantAbsentEnv: []string{injection.EnvMPSActiveThreadPercentage},
 		},
 		{
 			name: "sm-sharing gets both caps",
@@ -955,6 +1010,13 @@ func TestCreateContainerInjectsMPSEnforcementCaps(t *testing.T) {
 			}
 
 			assertAdjustmentSets(t, adj, tt.wantEnv)
+			for _, absent := range tt.wantAbsentEnv {
+				for _, entry := range adjustmentEnv(adj) {
+					if !entry.removal && entry.key == absent {
+						t.Errorf("adjustment sets %s = %q, but this container must not carry that cap", absent, entry.value)
+					}
+				}
+			}
 
 			wantSource := tt.wantMountSource
 			if wantSource == "" {
@@ -989,6 +1051,10 @@ func TestCreateContainerInjectedCapsOverrideContainerProvidedValues(t *testing.T
 			limitAnnotation:   "4Gi",
 			devicesAnnotation: "GPU-abc123,GPU-def456",
 			portionAnnotation: "0.25",
+			// sm-sharing, because that is the only mode a compute cap applies
+			// in — and the mode in which a pod author setting the env var
+			// themselves would actually be trying to escape something.
+			modeAnnotation: "sm-sharing",
 		},
 	}
 	ctr := &api.Container{
@@ -1070,7 +1136,7 @@ func TestCreateContainerOverridesBareEnvKey(t *testing.T) {
 	p := newTestPlugin(t)
 	pod := &api.PodSandbox{
 		Name:        "test-pod",
-		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5"},
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
 	}
 	ctr := &api.Container{
 		Name: "trainer",
@@ -1239,6 +1305,11 @@ type fakeDrainer struct {
 	resp  mpsdrain.Response
 	err   error
 	block bool
+
+	// journal, when set, records this call against a shared ordering log the
+	// namespace tests use to assert a release lands after a drain.
+	journal *[]string
+	jmu     *sync.Mutex
 }
 
 func (f *fakeDrainer) Drain(ctx context.Context, req mpsdrain.Request) (mpsdrain.Response, error) {
@@ -1252,6 +1323,11 @@ func (f *fakeDrainer) Drain(ctx context.Context, req mpsdrain.Request) (mpsdrain
 	block := f.block
 	resp, err := f.resp, f.err
 	f.mu.Unlock()
+	if f.journal != nil {
+		f.jmu.Lock()
+		*f.journal = append(*f.journal, "drain")
+		f.jmu.Unlock()
+	}
 
 	if block {
 		<-ctx.Done()
@@ -2279,7 +2355,7 @@ func TestCreateContainerShimDisabledTouchesNothing(t *testing.T) {
 	p := newTestPlugin(t)
 	pod := &api.PodSandbox{
 		Name:        "test-pod",
-		Annotations: map[string]string{limitAnnotation: "4Gi", devicesAnnotation: "GPU-abc123", portionAnnotation: "0.5"},
+		Annotations: map[string]string{limitAnnotation: "4Gi", devicesAnnotation: "GPU-abc123", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
 	}
 	ctr := &api.Container{Name: "trainer", Env: []string{injection.EnvLDLibraryPath + "=" + runtimePath}}
 
@@ -2311,7 +2387,7 @@ func TestCreateContainerShimDisabledTouchesNothing(t *testing.T) {
 		injection.EnvMPSPinnedDeviceMemLimit:   "0=4096M",
 		injection.EnvMPSActiveThreadPercentage: "50",
 		injection.EnvVisibleDevices:            "GPU-abc123",
-		injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+		injection.EnvMPSPipeDirectory:          configuration.ContainerMPSPipeDirectory,
 	})
 
 	applied := applyAdjustment(ctr, adj)
@@ -2372,5 +2448,539 @@ func TestNVMLShimMountSourceAgreesWithTheStagingPath(t *testing.T) {
 	if mount.GetSource() != daemonpaths.NVMLShimDir {
 		t.Errorf("shim mount source = %q but fractiond stages to %q; containers would mount a directory with no library in it",
 			mount.GetSource(), daemonpaths.NVMLShimDir)
+	}
+}
+
+// ── per-container MPS namespaces ────────────────────────────────────────────
+
+// fakeProvisioner stands in for mpsd's namespace endpoints. It records every
+// call in order, including against the shared journal a test uses to assert
+// that a release lands after a drain.
+type fakeProvisioner struct {
+	mu sync.Mutex
+
+	pipeDirectory string
+	namespace     string
+	provisionErr  error
+	releaseResp   mpsdrain.ReleaseResponse
+	releaseErr    error
+	block         bool
+
+	provisions []mpsdrain.ProvisionRequest
+	releases   []mpsdrain.ReleaseRequest
+	deadlines  []time.Duration
+
+	journal *[]string
+	jmu     *sync.Mutex
+}
+
+func (f *fakeProvisioner) note(entry string) {
+	if f.journal == nil {
+		return
+	}
+	f.jmu.Lock()
+	defer f.jmu.Unlock()
+	*f.journal = append(*f.journal, entry)
+}
+
+func (f *fakeProvisioner) Provision(ctx context.Context, req mpsdrain.ProvisionRequest) (mpsdrain.ProvisionResponse, error) {
+	f.mu.Lock()
+	f.provisions = append(f.provisions, req)
+	remaining := time.Duration(-1)
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	f.deadlines = append(f.deadlines, remaining)
+	block, err := f.block, f.provisionErr
+	dir, namespace := f.pipeDirectory, f.namespace
+	f.mu.Unlock()
+	f.note("provision")
+
+	if block {
+		<-ctx.Done()
+		return mpsdrain.ProvisionResponse{}, ctx.Err()
+	}
+	if err != nil {
+		return mpsdrain.ProvisionResponse{}, err
+	}
+	return mpsdrain.ProvisionResponse{
+		PipeDirectory:       dir,
+		Namespace:           namespace,
+		Server:              "shared",
+		ActiveThreadPercent: req.ActiveThreadPercent,
+	}, nil
+}
+
+func (f *fakeProvisioner) Release(_ context.Context, req mpsdrain.ReleaseRequest) (mpsdrain.ReleaseResponse, error) {
+	f.mu.Lock()
+	f.releases = append(f.releases, req)
+	resp, err := f.releaseResp, f.releaseErr
+	f.mu.Unlock()
+	f.note("release")
+	return resp, err
+}
+
+func (f *fakeProvisioner) provisionRequests() []mpsdrain.ProvisionRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.provisions)
+}
+
+func (f *fakeProvisioner) releaseRequests() []mpsdrain.ReleaseRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.releases)
+}
+
+const testNamespacePipeDir = "/run/nvidia-mps/shared/kai_abc123_0011223344"
+
+// newProvisioningPlugin builds a plugin wired to a namespace provisioner.
+func newProvisioningPlugin(t *testing.T, prov *fakeProvisioner, cfg Config) *Plugin {
+	t.Helper()
+	if cfg.AnnotationPrefix == "" {
+		cfg.AnnotationPrefix = configuration.DefaultAnnotationPrefix
+	}
+	if cfg.MPSPipeDirectory == "" {
+		cfg.MPSPipeDirectory = configuration.DefaultMPSPipeDirectory
+	}
+	if cfg.MapDir == "" {
+		cfg.MapDir = t.TempDir()
+	}
+	if cfg.Log == nil {
+		cfg.Log = slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))
+	}
+	if cfg.FlushTimeout == 0 {
+		cfg.FlushTimeout = testFlushTimeout
+	}
+	cfg.Provisioner = prov
+
+	p, err := NewPlugin(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewPlugin: %v", err)
+	}
+	flushBeforeCleanup(t, p)
+	return p
+}
+
+// TestSMSharingContainerIsMountedOnlyItsOwnNamespaceDirectory is the whole
+// mechanism, end to end on the fractiond side.
+//
+// The container is bind-mounted the leaf namespace directory mpsd read back
+// from the control daemon — not the shared server directory it used to get.
+// That distinction is the enforcement: the server directory carries the
+// `default` namespace, which is uncapped, so a container mounted there has no
+// ceiling at all while looking correctly routed.
+func TestSMSharingContainerIsMountedOnlyItsOwnNamespaceDirectory(t *testing.T) {
+	prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir, namespace: "kai_abc123_0011223344"}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	pod := &api.PodSandbox{
+		Name:      "test-pod",
+		Namespace: "team-a",
+		Annotations: map[string]string{
+			limitAnnotation:   "4Gi",
+			devicesAnnotation: "GPU-abc123",
+			portionAnnotation: "0.25",
+			modeAnnotation:    "sm-sharing",
+		},
+	}
+	ctr := &api.Container{Id: "container-id", Name: "trainer"}
+
+	adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+	if adj == nil {
+		t.Fatal("expected an adjustment")
+	}
+
+	if len(adj.Mounts) != 1 {
+		t.Fatalf("mounts = %+v, want exactly one", adj.Mounts)
+	}
+	if adj.Mounts[0].Source != testNamespacePipeDir {
+		t.Errorf("mount source = %q, want the namespace directory %q", adj.Mounts[0].Source, testNamespacePipeDir)
+	}
+	if adj.Mounts[0].Source == filepath.Dir(testNamespacePipeDir) {
+		t.Error("the server directory was mounted; its default namespace is uncapped")
+	}
+	if adj.Mounts[0].Destination != configuration.ContainerMPSPipeDirectory {
+		t.Errorf("mount destination = %q, want %q", adj.Mounts[0].Destination, configuration.ContainerMPSPipeDirectory)
+	}
+
+	entries := adjustmentEnv(adj)
+	if got := valueOfAdd(entries, injection.EnvMPSPipeDirectory); got != configuration.ContainerMPSPipeDirectory {
+		t.Errorf("%s = %q, want the fixed in-container path %q", injection.EnvMPSPipeDirectory, got, configuration.ContainerMPSPipeDirectory)
+	}
+	// The env var is still injected, and is still only advisory: it can lower
+	// the container's share, never raise it past the namespace's ceiling.
+	if got := valueOfAdd(entries, injection.EnvMPSActiveThreadPercentage); got != "25" {
+		t.Errorf("%s = %q, want %q", injection.EnvMPSActiveThreadPercentage, got, "25")
+	}
+
+	requests := prov.provisionRequests()
+	if len(requests) != 1 {
+		t.Fatalf("provision requests = %d, want 1", len(requests))
+	}
+	if requests[0].ContainerID != "container-id" {
+		t.Errorf("provision container id = %q, want the runtime's id", requests[0].ContainerID)
+	}
+	if requests[0].ActiveThreadPercent != 25 {
+		t.Errorf("provisioned cap = %d%%, want 25%%", requests[0].ActiveThreadPercent)
+	}
+	if !slices.Equal(requests[0].GPUUUIDs, []string{"GPU-abc123"}) {
+		t.Errorf("provisioned GPU UUIDs = %v, want [GPU-abc123]", requests[0].GPUUUIDs)
+	}
+	if requests[0].Pod != "test-pod" || requests[0].Namespace != "team-a" {
+		t.Errorf("provision request = %+v, want the pod identity carried for logging", requests[0])
+	}
+}
+
+// TestSMSharingWithNoPortionIsStillGivenItsOwnNamespace.
+//
+// A container with no annotated portion asked for no cap, which is 100% — not a
+// reason to put it in the shared `default` namespace. Keeping `default` empty
+// is what lets mpsd cap it low as defence in depth without penalising anyone
+// who legitimately belongs there, because nobody does.
+func TestSMSharingWithNoPortionIsStillGivenItsOwnNamespace(t *testing.T) {
+	prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir, namespace: "kai_abc123_0011223344"}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", modeAnnotation: "sm-sharing"},
+	}
+	adj, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "container-id", Name: "trainer"})
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+
+	requests := prov.provisionRequests()
+	if len(requests) != 1 {
+		t.Fatalf("provision requests = %d, want 1", len(requests))
+	}
+	if requests[0].ActiveThreadPercent != 100 {
+		t.Errorf("provisioned cap = %d%%, want 100%% for a container that asked for no cap", requests[0].ActiveThreadPercent)
+	}
+	if adj.Mounts[0].Source != testNamespacePipeDir {
+		t.Errorf("mount source = %q, want its own namespace directory", adj.Mounts[0].Source)
+	}
+	// No portion annotated still means no injected env var: "100" there would
+	// look like a cap while enforcing nothing.
+	if got := valueOfAdd(adjustmentEnv(adj), injection.EnvMPSActiveThreadPercentage); got != "" {
+		t.Errorf("%s = %q, want it absent", injection.EnvMPSActiveThreadPercentage, got)
+	}
+}
+
+// TestProvisioningFailureBlocksTheContainer, including under fail-open.
+//
+// FailOpen is about malformed input: one bad pod versus a node full of stuck
+// pods. This is the enforcement plane being unavailable, where creating the
+// container anyway puts an uncapped tenant on a GPU other tenants are using —
+// the exact outcome the namespace exists to prevent. A pod that will not start
+// is visible and fixable; a pod that quietly took the whole card is neither.
+func TestProvisioningFailureBlocksTheContainer(t *testing.T) {
+	for _, failOpen := range []bool{false, true} {
+		prov := &fakeProvisioner{provisionErr: errors.New("mpsd is not answering")}
+		p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true, FailOpen: failOpen})
+
+		pod := &api.PodSandbox{
+			Name: "test-pod",
+			Annotations: map[string]string{
+				limitAnnotation:   "4Gi",
+				portionAnnotation: "0.5",
+				modeAnnotation:    "sm-sharing",
+			},
+		}
+		adj, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "container-id", Name: "trainer"})
+		if err == nil {
+			t.Fatalf("failOpen=%v: CreateContainer() error = nil, want the container refused", failOpen)
+		}
+		if adj != nil {
+			t.Errorf("failOpen=%v: an adjustment was returned alongside the error: %+v", failOpen, adj)
+		}
+		if !strings.Contains(err.Error(), "mpsd is not answering") {
+			t.Errorf("failOpen=%v: error %v does not carry the reason", failOpen, err)
+		}
+	}
+}
+
+// TestProvisioningRejectsAnEmptyPipeDirectory: an mpsd that answered without a
+// path would otherwise produce a bind mount from "", which the runtime resolves
+// to something no one intended.
+func TestProvisioningRejectsAnEmptyPipeDirectory(t *testing.T) {
+	prov := &fakeProvisioner{pipeDirectory: ""}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+	if _, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "container-id", Name: "trainer"}); err == nil {
+		t.Fatal("CreateContainer() error = nil, want a refusal when no pipe directory came back")
+	}
+}
+
+// TestTimeSlicingNeverProvisionsANamespace: the cap does not apply in
+// time-slicing mode, so there is nothing to provision — and provisioning anyway
+// would put a hard SM partition on a container that is supposed to get whatever
+// the card is not using.
+func TestTimeSlicingNeverProvisionsANamespace(t *testing.T) {
+	for _, annotations := range []map[string]string{
+		{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "time-slicing"},
+		{limitAnnotation: "4Gi", portionAnnotation: "0.5"}, // no mode: the default is time-slicing
+		{limitAnnotation: "4Gi"},
+	} {
+		prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir}
+		p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+		adj, _, err := p.CreateContainer(context.Background(),
+			&api.PodSandbox{Name: "test-pod", Annotations: annotations},
+			&api.Container{Id: "container-id", Name: "trainer"})
+		if err != nil {
+			t.Fatalf("annotations %v: CreateContainer() error = %v", annotations, err)
+		}
+		if n := len(prov.provisionRequests()); n != 0 {
+			t.Errorf("annotations %v: %d namespaces provisioned for a time-slicing container, want 0", annotations, n)
+		}
+		if adj.Mounts[0].Source != configuration.DefaultMPSPipeDirectory {
+			t.Errorf("annotations %v: mount source = %q, want the node's MPS pipe directory", annotations, adj.Mounts[0].Source)
+		}
+	}
+}
+
+// TestSMSharingKillSwitchProvisionsNothing: with --support-sm-sharing=false the
+// shared MPS server the namespaces live on does not exist, so the annotation is
+// rejected like any other invalid value and nothing is provisioned. Under
+// fail-open the container is created as a time-slicing one — uncapped, which is
+// what turning the feature off means.
+func TestSMSharingKillSwitchProvisionsNothing(t *testing.T) {
+	pod := &api.PodSandbox{
+		Name: "test-pod",
+		Annotations: map[string]string{
+			limitAnnotation:   "4Gi",
+			portionAnnotation: "0.5",
+			modeAnnotation:    "sm-sharing",
+		},
+	}
+
+	// Fail-closed: the container is refused, as it was before namespaces
+	// existed.
+	prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: false})
+	if _, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "c", Name: "trainer"}); err == nil {
+		t.Error("CreateContainer() error = nil, want the sm-sharing annotation rejected on a cluster with it disabled")
+	}
+	if n := len(prov.provisionRequests()); n != 0 {
+		t.Errorf("%d namespaces provisioned with sm-sharing disabled, want 0", n)
+	}
+
+	// Fail-open: the container is created, in time-slicing mode, with no
+	// compute cap of any kind.
+	prov = &fakeProvisioner{pipeDirectory: testNamespacePipeDir}
+	p = newProvisioningPlugin(t, prov, Config{SupportSMSharing: false, FailOpen: true})
+	adj, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "c", Name: "trainer"})
+	if err != nil {
+		t.Fatalf("CreateContainer() under fail-open error = %v", err)
+	}
+	if n := len(prov.provisionRequests()); n != 0 {
+		t.Errorf("%d namespaces provisioned with sm-sharing disabled (fail-open), want 0", n)
+	}
+	if got := valueOfAdd(adjustmentEnv(adj), injection.EnvMPSActiveThreadPercentage); got != "" {
+		t.Errorf("%s = %q with sm-sharing disabled, want no compute cap at all", injection.EnvMPSActiveThreadPercentage, got)
+	}
+}
+
+// TestWithoutAProvisionerSMSharingFallsBackToTheSharedSocket pins the
+// behaviour of the kill switch on the namespace mechanism itself
+// (--namespace-isolation=false): the pre-namespace mount, and a cap that is
+// only the advisory env var. It is not a configuration to want, but it must
+// work, because it is the way out if the mechanism itself goes wrong.
+func TestWithoutAProvisionerSMSharingFallsBackToTheSharedSocket(t *testing.T) {
+	p := newTestPlugin(t) // no provisioner
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+	adj, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "c", Name: "trainer"})
+	if err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+
+	want := filepath.Join(configuration.DefaultMPSPipeDirectory, configuration.SharedMPSSocketPath)
+	if adj.Mounts[0].Source != want {
+		t.Errorf("mount source = %q, want the pre-namespace shared socket %q", adj.Mounts[0].Source, want)
+	}
+}
+
+// TestReleaseHappensOnRemoveContainerAfterTheDrain is the ordering requirement.
+//
+// A namespace with an active client cannot be deleted, and at StopContainer
+// time the container's processes are still alive — that hook is where they are
+// drained, not where they end. RemoveContainer runs after the runtime has torn
+// the container down, so the drain has already happened and the client is gone.
+// Releasing from the earlier hook would make every delete fail on its first
+// attempt and lean entirely on mpsd's retry.
+func TestReleaseHappensOnRemoveContainerAfterTheDrain(t *testing.T) {
+	var journal []string
+	var jmu sync.Mutex
+
+	drainer := &fakeDrainer{journal: &journal, jmu: &jmu}
+	prov := &fakeProvisioner{
+		pipeDirectory: testNamespacePipeDir,
+		namespace:     "kai_abc123_0011223344",
+		releaseResp:   mpsdrain.ReleaseResponse{Deleted: true, Namespace: "kai_abc123_0011223344"},
+		journal:       &journal,
+		jmu:           &jmu,
+	}
+
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true, Drainer: drainer})
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+	ctr := &api.Container{Id: "container-id", Name: "trainer"}
+
+	if _, _, err := p.CreateContainer(context.Background(), pod, ctr); err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+	if _, err := p.StopContainer(context.Background(), pod, ctr); err != nil {
+		t.Fatalf("StopContainer() error = %v", err)
+	}
+	if err := p.RemoveContainer(context.Background(), pod, ctr); err != nil {
+		t.Fatalf("RemoveContainer() error = %v", err)
+	}
+
+	jmu.Lock()
+	got := slices.Clone(journal)
+	jmu.Unlock()
+	want := []string{"provision", "drain", "release"}
+	if !slices.Equal(got, want) {
+		t.Errorf("call order = %v, want %v", got, want)
+	}
+
+	releases := prov.releaseRequests()
+	if len(releases) != 1 || releases[0].ContainerID != "container-id" {
+		t.Errorf("releases = %+v, want one for container-id", releases)
+	}
+}
+
+// TestReleaseFailureDoesNotBreakTeardown: the container is already gone, there
+// is nothing left to protect, and mpsd reclaims the namespaces of containers
+// that have disappeared during its own sweep. A release that fails must cost a
+// log line and nothing else.
+func TestReleaseFailureDoesNotBreakTeardown(t *testing.T) {
+	prov := &fakeProvisioner{releaseErr: errors.New("mpsd is not answering")}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+	if err := p.RemoveContainer(context.Background(), pod, &api.Container{Id: "container-id", Name: "trainer"}); err != nil {
+		t.Errorf("RemoveContainer() error = %v, want the failure stepped over", err)
+	}
+	if n := len(prov.releaseRequests()); n != 1 {
+		t.Fatalf("release attempts = %d, want 1: the failure path was never reached", n)
+	}
+}
+
+// TestRemoveContainerSkipsContainersThatNeverHadANamespace: RemoveContainer
+// fires for every container on the node, and most of them have nothing to do
+// with GPUs. A socket round trip each would be a lot of nothing on the runtime's
+// hot path.
+func TestRemoveContainerSkipsContainersThatNeverHadANamespace(t *testing.T) {
+	prov := &fakeProvisioner{}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	if err := p.RemoveContainer(context.Background(),
+		&api.PodSandbox{Name: "test-pod"},
+		&api.Container{Id: "container-id", Name: "some-sidecar"}); err != nil {
+		t.Fatalf("RemoveContainer() error = %v", err)
+	}
+	if n := len(prov.releaseRequests()); n != 0 {
+		t.Errorf("%d releases for a container with no GPU annotations, want 0", n)
+	}
+}
+
+// TestRemoveContainerReleasesWhenTheAnnotationsCannotBeRead: the skip above is
+// an optimisation, and an optimisation that cannot answer must fall through to
+// the safe side. A release for a container with no namespace is a no-op at the
+// other end; a release skipped for one that has a namespace holds it until
+// mpsd's sweep notices the container is gone.
+func TestRemoveContainerReleasesWhenTheAnnotationsCannotBeRead(t *testing.T) {
+	prov := &fakeProvisioner{}
+	p := newProvisioningPlugin(t, prov, Config{SupportSMSharing: true})
+
+	if err := p.RemoveContainer(context.Background(),
+		&api.PodSandbox{Name: "test-pod", Annotations: map[string]string{limitAnnotation: "not-a-quantity"}},
+		&api.Container{Id: "container-id", Name: "trainer"}); err != nil {
+		t.Fatalf("RemoveContainer() error = %v", err)
+	}
+	if n := len(prov.releaseRequests()); n != 1 {
+		t.Errorf("%d releases for a container whose annotations could not be read, want 1", n)
+	}
+}
+
+// TestNamespaceCallsFitInsideTheNRIBudget: every call an NRI hook makes has to
+// fit inside the runtime's request deadline, because overrunning it is treated
+// as fatal and drops fractiond off NRI — and a plugin that is not registered
+// injects nothing into any container on the node.
+func TestNamespaceCallsFitInsideTheNRIBudget(t *testing.T) {
+	prov := &fakeProvisioner{pipeDirectory: testNamespacePipeDir}
+	p := newProvisioningPlugin(t, prov, Config{
+		SupportSMSharing: true,
+		RequestTimeout:   func() time.Duration { return 2 * time.Second },
+	})
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+	if _, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "c", Name: "trainer"}); err != nil {
+		t.Fatalf("CreateContainer() error = %v", err)
+	}
+
+	prov.mu.Lock()
+	defer prov.mu.Unlock()
+	if len(prov.deadlines) != 1 {
+		t.Fatalf("deadlines recorded = %d, want 1", len(prov.deadlines))
+	}
+	if prov.deadlines[0] <= 0 {
+		t.Fatal("the provision call carried no deadline; a slow mpsd would hold the NRI hook open")
+	}
+	if prov.deadlines[0] > time.Second {
+		t.Errorf("provision deadline = %v, want at most half the 2s NRI request timeout", prov.deadlines[0])
+	}
+}
+
+// TestProvisioningThatOverrunsTheBudgetBlocksTheContainer: giving up on mpsd is
+// the same answer as mpsd refusing. The container does not start, because there
+// is no namespace to put it in.
+func TestProvisioningThatOverrunsTheBudgetBlocksTheContainer(t *testing.T) {
+	prov := &fakeProvisioner{block: true}
+	p := newProvisioningPlugin(t, prov, Config{
+		SupportSMSharing: true,
+		DrainTimeout:     20 * time.Millisecond,
+	})
+
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", portionAnnotation: "0.5", modeAnnotation: "sm-sharing"},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Id: "c", Name: "trainer"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("CreateContainer() error = nil, want the container refused when mpsd did not answer in time")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("CreateContainer() never returned; the provision call is not bounded")
 	}
 }

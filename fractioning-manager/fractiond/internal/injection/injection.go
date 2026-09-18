@@ -42,14 +42,30 @@ const (
 	// injection contract.
 	EnvVisibleDevices = "NVIDIA_VISIBLE_DEVICES"
 
-	// EnvMPSActiveThreadPercentage caps the share of a device's SMs the
-	// container's MPS clients may occupy. It is read by the CUDA runtime inside
-	// the container when it connects to an MPS server, so it needs nothing from
-	// the container toolkit or the device plugin — only MPS, which every
-	// fractional container already goes through. It is what makes a "half a
-	// GPU" request mean half the compute and not just half the memory. Injected
-	// only when the scheduler recorded a compute portion (see
-	// annotations.ParseComputePortion).
+	// EnvMPSActiveThreadPercentage asks the CUDA runtime inside the container
+	// for a share of the device's SMs.
+	//
+	// It is INFORMATIONAL, and nothing here may be built on the assumption that
+	// it enforces anything. Any process in the container can re-export it
+	// before cuInit, so on its own it caps nobody. What enforces the cap is the
+	// active-thread percentage on the per-container MPS namespace mpsd
+	// provisions, which the container has no privilege to change. Measured on
+	// driver 615: with the namespace at 25%, a client exporting 100, 75 or 50
+	// here still got the 25% share; exporting 10 got 10%. The rule is
+	//
+	//	effective = min(this value, the namespace's ceiling)
+	//
+	// so this can only ever LOWER the container's share, never raise it. It is
+	// still injected because a workload that reads it makes sensible sizing
+	// decisions from it, and because lowering is a legitimate thing for a
+	// workload to do.
+	//
+	// Do not "harden" it — there is nothing to harden. Removing the container's
+	// own value and writing ours (which the create hook does) is worth doing
+	// for tidiness and for the no-namespace fallback, but it is not a control:
+	// treating it as one is how this feature came to be needed in the first
+	// place. Injected only when the scheduler recorded a compute portion AND
+	// the container is in sm-sharing mode (see annotations.ParseComputePortion).
 	EnvMPSActiveThreadPercentage = "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE"
 
 	// EnvMPSPinnedDeviceMemLimit caps device memory per GPU, enforced by the MPS
@@ -232,6 +248,12 @@ func PrependLibraryPath(existing, dir string) (value string, changed bool) {
 // compute mode. Both the fractiond create hook (internal/plugin.go
 // buildAdjustment) and its audit detector (internal/audit) call this so the
 // expected mount can never drift between the two.
+//
+// The sm-sharing source here is the shared server's DEFAULT namespace, which is
+// the fallback used only when mpsd is not provisioning per-container namespaces
+// (see MPSNamespaceMount). That namespace is shared by everything routed to it
+// and is capped, if at all, by mpsd's own conservative default — it is not a
+// per-container cap and must not be treated as one.
 func MPSPipeMount(mpsPipeDir string, mode annotations.ComputeMode) (source, destination string) {
 	if mode == annotations.ComputeModeSMSharing {
 		// sm-sharing routes the container to the shared MPS server's socket
@@ -241,4 +263,18 @@ func MPSPipeMount(mpsPipeDir string, mode annotations.ComputeMode) (source, dest
 	}
 	// time-slicing (the default): identity mount, unchanged from today.
 	return mpsPipeDir, mpsPipeDir
+}
+
+// MPSNamespaceMount returns the bind mount that puts a container inside the MPS
+// namespace mpsd provisioned for it: the namespace's own pipe directory as the
+// source, at the same fixed in-container destination MPSPipeMount uses.
+//
+// The source is the LEAF namespace directory and only that. Mounting its parent
+// — the server directory — would expose the server's `default` namespace
+// alongside it, and a container that found that socket would be in an uncapped
+// namespace while appearing to be correctly routed. The host path is passed in
+// rather than derived because mpsd reads it back from the control daemon; the
+// layout it happens to have is not something either side should encode.
+func MPSNamespaceMount(namespacePipeDir string) (source, destination string) {
+	return namespacePipeDir, configuration.ContainerMPSPipeDirectory
 }

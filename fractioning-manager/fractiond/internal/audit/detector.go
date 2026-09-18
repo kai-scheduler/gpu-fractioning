@@ -150,7 +150,11 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 	// The compute cap follows the same fail-open contract as the compute mode
 	// above: fail-closed means the container was never created by us, fail-open
 	// means it was created without the cap and is still owed everything else.
-	_, hasComputeCap, err := annotations.ParseComputePortion(pod.GetAnnotations(), container.GetName(), d.annotationPrefix)
+	// It is evaluated against the same mode and chicken bit the create hook
+	// used, so a container the hook deliberately left uncapped — a time-slicing
+	// one, or any container on a cluster with sm-sharing off — is not reported
+	// as missing a cap it was never going to get.
+	_, hasComputeCap, err := annotations.ParseComputePortion(pod.GetAnnotations(), container.GetName(), d.annotationPrefix, computeMode, d.smSharingEnabled)
 	if err != nil {
 		if !d.failOpen {
 			d.logger().Warn("audit: skipping container with unparseable GPU compute portion annotation",
@@ -218,10 +222,43 @@ func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevic
 	if hasComputeCap && !env[injection.EnvMPSActiveThreadPercentage] {
 		missing = append(missing, "env:"+injection.EnvMPSActiveThreadPercentage)
 	}
-	if !hasMount(container.GetMounts(), expectedMountSource, expectedMountDestination) {
+	if !d.hasPipeMount(container.GetMounts(), computeMode, expectedMountSource, expectedMountDestination) {
 		missing = append(missing, "mount:"+expectedMountSource+":"+expectedMountDestination)
 	}
 	return missing
+}
+
+// hasPipeMount reports whether the container carries an acceptable MPS pipe
+// mount.
+//
+// For time-slicing the expected mount is fully determined, so it is matched
+// exactly. For sm-sharing it is not: the source is the pipe directory of the
+// MPS namespace mpsd provisioned for this particular container, read back from
+// the control daemon at creation time and different for every container. The
+// audit cannot recompute it — and must not try, since guessing the layout is
+// exactly what mounting the read-back path exists to avoid.
+//
+// So sm-sharing is checked structurally instead: some mount lands on the
+// expected in-container destination, from a source inside the node's MPS pipe
+// directory. That is enough for what this audit is for — finding containers
+// that started with NO injection at all, while the agent was down — and it
+// deliberately accepts both the per-namespace source and the shared-server
+// source a node with namespace isolation disabled produces. Verifying that a
+// mounted namespace carries the right cap is a different job, and one only the
+// control daemon can answer.
+func (d detector) hasPipeMount(mounts []*api.Mount, mode annotations.ComputeMode, expectedSource, expectedDestination string) bool {
+	if mode != annotations.ComputeModeSMSharing {
+		return hasMount(mounts, expectedSource, expectedDestination)
+	}
+	for _, m := range mounts {
+		if m.GetDestination() != expectedDestination {
+			continue
+		}
+		if d.mpsPipeDirectory == "" || strings.HasPrefix(m.GetSource(), d.mpsPipeDirectory+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func (d detector) logger() *slog.Logger {

@@ -456,17 +456,41 @@ func TestParseComputePortion(t *testing.T) {
 		},
 		{
 			// MPS only accepts whole percents, so a third of a GPU has to round
-			// somewhere. Rounding down (33, not 34) keeps the sum of three such
+			// somewhere. Rounding DOWN (33, not 34) keeps the sum of three such
 			// containers at or under 100% of the card.
-			name:        "one third rounds to nearest whole percent",
+			name:        "one third rounds down to a whole percent",
 			annotations: map[string]string{computePortionTestKey: "0.333"},
 			wantPercent: 33,
 			wantFound:   true,
 		},
 		{
-			name:        "rounds up to nearest whole percent",
+			// The case that makes flooring mandatory rather than tidy. Rounding
+			// to nearest turns 0.336 into 34, and three tenants of one GPU into
+			// 102% of it. A namespace active-thread percentage is a hard SM
+			// partition, so over-subscribing it is not optimistic accounting —
+			// it asks the driver for SMs that do not exist.
+			name:        "a portion that would round up is floored instead",
 			annotations: map[string]string{computePortionTestKey: "0.336"},
-			wantPercent: 34,
+			wantPercent: 33,
+			wantFound:   true,
+		},
+		{
+			// The eight-way split that was the original defect: 0.125 rounded
+			// to nearest is 13, and 13 × 8 = 104.
+			name:        "an eighth of a GPU floors to 12, not 13",
+			annotations: map[string]string{computePortionTestKey: "0.125"},
+			wantPercent: 12,
+			wantFound:   true,
+		},
+		{
+			// Binary floating point makes 0.07*100 come out as 7.000000000000001
+			// and 0.29*100 as 28.999999999999996. Flooring the latter would give
+			// 28 if it were done naively on the decimal the user wrote; what
+			// matters is that the result is never ABOVE the portion, so 28 is
+			// the correct, conservative answer and 29 would not be.
+			name:        "a portion whose percent is not exact in binary still floors",
+			annotations: map[string]string{computePortionTestKey: "0.29"},
+			wantPercent: 28,
 			wantFound:   true,
 		},
 		{
@@ -637,7 +661,10 @@ func TestParseComputePortion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			percent, found, err := ParseComputePortion(tt.annotations, "trainer", configuration.DefaultAnnotationPrefix)
+			// The table describes the case where the cap applies: an
+			// sm-sharing container on a cluster with sm-sharing enabled. The
+			// two ways it does not apply have tests of their own below.
+			percent, found, err := ParseComputePortion(tt.annotations, "trainer", configuration.DefaultAnnotationPrefix, ComputeModeSMSharing, true)
 
 			if tt.wantErr {
 				if err == nil {
@@ -681,11 +708,179 @@ func TestParseComputePortion(t *testing.T) {
 func TestParseComputePortionHonorsPrefix(t *testing.T) {
 	ann := map[string]string{"example.com/container.trainer.gpu-compute.portion": "0.25"}
 
-	if percent, found, err := ParseComputePortion(ann, "trainer", "example.com/container."); err != nil || !found || percent != 25 {
+	if percent, found, err := ParseComputePortion(ann, "trainer", "example.com/container.", ComputeModeSMSharing, true); err != nil || !found || percent != 25 {
 		t.Errorf("with matching prefix = (%d, %v, %v), want (25, true, nil)", percent, found, err)
 	}
-	if percent, found, err := ParseComputePortion(ann, "trainer", configuration.DefaultAnnotationPrefix); err != nil || found || percent != 0 {
+	if percent, found, err := ParseComputePortion(ann, "trainer", configuration.DefaultAnnotationPrefix, ComputeModeSMSharing, true); err != nil || found || percent != 0 {
 		t.Errorf("with the default prefix = (%d, %v, %v), want (0, false, nil)", percent, found, err)
+	}
+}
+
+// TestParseComputePortionAppliesOnlyToSMSharing is the time-slicing exemption.
+//
+// The cap is a per-namespace active-thread percentage, which is a hard
+// partition of the SMs: a container capped at 50% cannot touch the other half
+// even when the card is idle. That is what sm-sharing means and the opposite of
+// what time-slicing promises — under time-slicing, unused time goes to whoever
+// wants it. Applying the portion in both modes (which is what the code used to
+// do) silently halves a GPU for a lone time-slicing tenant, and does it in a way
+// no annotation, log line or metric distinguishes from the workload simply being
+// slow.
+func TestParseComputePortionAppliesOnlyToSMSharing(t *testing.T) {
+	tests := []struct {
+		name             string
+		mode             ComputeMode
+		smSharingEnabled bool
+		wantPercent      int
+		wantFound        bool
+	}{
+		{
+			name:             "sm-sharing on an enabled cluster is capped",
+			mode:             ComputeModeSMSharing,
+			smSharingEnabled: true,
+			wantPercent:      50,
+			wantFound:        true,
+		},
+		{
+			name:             "time-slicing is not capped",
+			mode:             ComputeModeTimeSlicing,
+			smSharingEnabled: true,
+		},
+		{
+			// The kill switch. --support-sm-sharing=false turns off the shared
+			// MPS server the per-container namespaces live on, so there is
+			// nowhere to enforce a cap; leaving containers hard-capped by a
+			// feature that has been switched off would make the switch a way to
+			// break workloads rather than a way to back the feature out.
+			name:             "a disabled cluster does not cap, even in sm-sharing mode",
+			mode:             ComputeModeSMSharing,
+			smSharingEnabled: false,
+		},
+		{
+			name:             "a disabled cluster does not cap in time-slicing mode either",
+			mode:             ComputeModeTimeSlicing,
+			smSharingEnabled: false,
+		},
+		{
+			// An empty mode is what a zero value looks like. It is not
+			// sm-sharing, so it must not be capped: defaulting an unknown mode
+			// into the capped branch is exactly the mistake that would put a
+			// hard partition on a time-slicing container.
+			name:             "an unset mode is not capped",
+			mode:             "",
+			smSharingEnabled: true,
+		},
+	}
+
+	ann := map[string]string{computePortionTestKey: "0.5"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			percent, found, err := ParseComputePortion(ann, "trainer", configuration.DefaultAnnotationPrefix, tt.mode, tt.smSharingEnabled)
+			if err != nil {
+				t.Fatalf("ParseComputePortion() unexpected error: %v", err)
+			}
+			if found != tt.wantFound || percent != tt.wantPercent {
+				t.Errorf("ParseComputePortion() = (%d, %v), want (%d, %v)", percent, found, tt.wantPercent, tt.wantFound)
+			}
+		})
+	}
+}
+
+// TestParseComputePortionReportsMalformedValuesInEveryMode: the exemptions
+// above decide whether a cap is applied, not whether the annotation is checked.
+// The value is scheduler-written, so one that cannot be parsed means something
+// upstream is broken; swallowing it because this particular container would not
+// have been capped anyway would hide the breakage until a container that WOULD
+// be capped hit it.
+func TestParseComputePortionReportsMalformedValuesInEveryMode(t *testing.T) {
+	ann := map[string]string{computePortionTestKey: "not-a-number"}
+
+	for _, mode := range []ComputeMode{ComputeModeTimeSlicing, ComputeModeSMSharing} {
+		for _, enabled := range []bool{false, true} {
+			if _, _, err := ParseComputePortion(ann, "trainer", configuration.DefaultAnnotationPrefix, mode, enabled); err == nil {
+				t.Errorf("mode %q, smSharingEnabled %v: error = nil, want a parse failure", mode, enabled)
+			}
+		}
+	}
+}
+
+// TestComputePercentNeverOversubscribesTheCard is the property the floor exists
+// for: whatever set of portions the scheduler hands out, if they fit on one GPU
+// then so do the percentages derived from them.
+//
+// It is a property test rather than a table because the failure it guards
+// against is arithmetic, not a specific input: the old rounding was correct for
+// halves and quarters and wrong for eighths, tenths and thirds, which is
+// exactly the shape of bug a hand-written table finds last.
+//
+// The only allowance is the 1% floor, which can over-subscribe by at most 1 per
+// container that asked for less than that. It is bounded, deliberate (0 means
+// "unlimited" to MPS) and accounted for explicitly here rather than smuggled
+// into the tolerance.
+func TestComputePercentNeverOversubscribesTheCard(t *testing.T) {
+	splits := [][]float64{
+		{1},
+		{0.5, 0.5},
+		{0.25, 0.25, 0.25, 0.25},
+		{0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125},
+		{1.0 / 3, 1.0 / 3, 1.0 / 3},
+		{1.0 / 7, 1.0 / 7, 1.0 / 7, 1.0 / 7, 1.0 / 7, 1.0 / 7, 1.0 / 7},
+		{0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1},
+		{0.7, 0.2, 0.1},
+		{0.29, 0.31, 0.4},
+		{0.9, 0.05, 0.05},
+		{0.99, 0.01},
+		// Portions that sum to less than a whole GPU must not be inflated to
+		// more than they asked for either.
+		{0.3, 0.3},
+		{0.001, 0.002, 0.003},
+	}
+
+	for _, split := range splits {
+		var portionSum float64
+		total, floored := 0, 0
+		for _, portion := range split {
+			portionSum += portion
+			percent := ComputePercent(portion)
+			if percent < 1 || percent > 100 {
+				t.Fatalf("ComputePercent(%v) = %d, outside the usable MPS range [1, 100]", portion, percent)
+			}
+			if float64(percent) > portion*100 {
+				// Only the floor may exceed the portion, and only up to 1%.
+				if percent != 1 {
+					t.Errorf("ComputePercent(%v) = %d, above the portion without being the 1%% floor", portion, percent)
+				}
+				floored++
+			}
+			total += percent
+		}
+
+		if portionSum > 1.0000001 {
+			t.Fatalf("test data error: %v sums to %v, which is more than one GPU", split, portionSum)
+		}
+		if total > 100+floored {
+			t.Errorf("portions %v sum to %v of a GPU but their percentages sum to %d%% (allowing %d for the 1%% floor)",
+				split, portionSum, total, floored)
+		}
+	}
+}
+
+// TestComputePercentIsMonotonic: a bigger portion must never yield a smaller
+// percentage. A rounding rule that breaks this would let a container that was
+// given more of a GPU be capped lower than one given less, which nothing
+// downstream would ever flag.
+func TestComputePercentIsMonotonic(t *testing.T) {
+	previous := 0
+	for step := 1; step <= 1000; step++ {
+		portion := float64(step) / 1000
+		percent := ComputePercent(portion)
+		if percent < previous {
+			t.Fatalf("ComputePercent(%v) = %d, below the previous %d", portion, percent, previous)
+		}
+		previous = percent
+	}
+	if previous != 100 {
+		t.Errorf("ComputePercent(1) = %d, want 100", previous)
 	}
 }
 

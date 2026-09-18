@@ -40,6 +40,15 @@ type Drainer interface {
 	Drain(ctx context.Context, req mpsdrain.Request) (mpsdrain.Response, error)
 }
 
+// Provisioner gets a container its own MPS namespace — the thing that makes its
+// compute cap enforceable rather than advisory — and gives it back afterwards.
+// *mpsdrain.Client is the production implementation, over the same unix socket
+// as the drain.
+type Provisioner interface {
+	Provision(ctx context.Context, req mpsdrain.ProvisionRequest) (mpsdrain.ProvisionResponse, error)
+	Release(ctx context.Context, req mpsdrain.ReleaseRequest) (mpsdrain.ReleaseResponse, error)
+}
+
 const (
 	// DefaultPluginName NRI plugin registration defaults.
 	DefaultPluginName = "gpu-fractioning"
@@ -102,6 +111,22 @@ type Config struct {
 	// Nil disables the drain.
 	Drainer Drainer
 
+	// Provisioner, when non-nil, is called from CreateContainer to get an
+	// sm-sharing container its own capped MPS namespace, and from
+	// RemoveContainer to give it back.
+	//
+	// Nil is the pre-namespace behaviour: sm-sharing containers are pointed at
+	// the shared server's default socket and their compute "cap" is the
+	// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE env var alone, which the container can
+	// re-export. It exists so the mechanism can be switched off without a code
+	// rollback, and is not a configuration anyone should want.
+	Provisioner Provisioner
+
+	// FlushTimeout bounds Plugin.Flush. Zero uses the events package default.
+	// Production leaves it unset; tests raise it so a loaded machine cannot
+	// turn a flush that is merely slow into a missing mapping record.
+	FlushTimeout time.Duration
+
 	// DrainTimeout is the drain call timeout the Drainer was configured with
 	// (fractiond's --mps-drain-timeout). StopContainer bounds its call by the
 	// smaller of this and half the NRI request timeout, so the configured value
@@ -149,10 +174,11 @@ type Plugin struct {
 	SupportSMSharing bool
 	Log              *slog.Logger
 
-	events    *events.Processor
-	adapter   adapter
-	readiness ReadinessSetter
-	drainer   Drainer
+	events      *events.Processor
+	adapter     adapter
+	readiness   ReadinessSetter
+	drainer     Drainer
+	provisioner Provisioner
 
 	// drainTimeout is Config.DrainTimeout; see drainBudget.
 	drainTimeout time.Duration
@@ -190,7 +216,8 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 	writer := fsstore.NewWriter(mapDir, log)
 	logPodEvents := cfg.LogPodEvents
 	proc := events.NewProcessor(writer, log, events.Options{
-		LogEvents: func() bool { return logPodEvents },
+		LogEvents:    func() bool { return logPodEvents },
+		FlushTimeout: cfg.FlushTimeout,
 	})
 
 	var sentinel *audit.Sentinel
@@ -217,6 +244,7 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, log: log},
 		readiness:        cfg.Readiness,
 		drainer:          cfg.Drainer,
+		provisioner:      cfg.Provisioner,
 		drainTimeout:     cfg.DrainTimeout,
 		sentinel:         sentinel,
 	}
@@ -258,18 +286,24 @@ func (p *Plugin) nriRequestTimeout() time.Duration {
 	return stub.DefaultRequestTimeout
 }
 
-// drainBudget is how long StopContainer may wait for mpsd: the smaller of the
-// configured drain timeout and half the NRI request timeout.
+// mpsdCallBudget is how long an NRI hook may wait for mpsd: the smaller of the
+// configured mpsd call timeout and half the NRI request timeout.
 //
 // Half, not all of it, so the response still has time to travel back and the
 // rest of the hook to run before the runtime's own deadline fires. Giving up
-// early is safe: mpsd keeps draining in the background after the caller walks
-// away, and the part that actually protects the GPU — the MPS terminate that
-// stops the client submitting new work — has already been issued by then.
-// Kubelet's termination grace period runs after this hook returns, so the drain
-// still has time to finish; what it does not have is permission to hold an NRI
-// callback open.
-func (p *Plugin) drainBudget() time.Duration {
+// early is safe for the drain: mpsd keeps draining in the background after the
+// caller walks away, and the part that actually protects the GPU — the MPS
+// terminate that stops the client submitting new work — has already been issued
+// by then. Kubelet's termination grace period runs after this hook returns, so
+// the drain still has time to finish; what it does not have is permission to
+// hold an NRI callback open.
+//
+// It bounds provisioning too, where giving up means the container is not
+// created rather than being created uncapped. That is the right trade the same
+// way round: the budget exists because overrunning it drops fractiond off NRI
+// entirely, and a plugin that is not registered injects nothing into any
+// container on the node.
+func (p *Plugin) mpsdCallBudget() time.Duration {
 	budget := p.nriRequestTimeout() / 2
 	if budget <= 0 {
 		// Only reachable if the runtime negotiated an absurdly small timeout.
@@ -335,8 +369,8 @@ func (p *Plugin) Synchronize(ctx context.Context, pods []*api.PodSandbox, contai
 // is returned. If FailOpen is false (default), the error is returned and
 // container creation is blocked — in which case the mapping is NOT recorded,
 // since the container will not exist.
-func (p *Plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, []*api.ContainerUpdate, error) {
-	adj, err := p.buildAdjustment(pod, ctr)
+func (p *Plugin) CreateContainer(ctx context.Context, pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, []*api.ContainerUpdate, error) {
+	adj, err := p.buildAdjustment(ctx, pod, ctr)
 	if err != nil {
 		// Fail-closed: the runtime will refuse to create the container, so do
 		// not record a mapping for it.
@@ -362,7 +396,7 @@ func (p *Plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, ctr *ap
 // compute-mode annotation (see injection.MPSPipeMount). When a shim directory
 // is configured it also mounts the shadow NVML library and merges its path into
 // LD_LIBRARY_PATH (see attachNVMLShim).
-func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, error) {
+func (p *Plugin) buildAdjustment(ctx context.Context, pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, error) {
 	gpuMemoryCfg, err := annotations.ParseGPUMemoryAnnotations(pod.Annotations, ctr.Name, p.AnnotationPrefix)
 	if err != nil {
 		p.Log.Warn("failed to parse GPU memory annotations",
@@ -402,9 +436,8 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		)
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
-	pipeSource, pipeDestination := injection.MPSPipeMount(p.MPSPipeDirectory, computeMode)
 
-	computePercent, hasComputeCap, err := annotations.ParseComputePortion(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	computePercent, hasComputeCap, err := annotations.ParseComputePortion(pod.Annotations, ctr.Name, p.AnnotationPrefix, computeMode, p.SupportSMSharing)
 	if err != nil {
 		p.Log.Warn("failed to parse GPU compute portion annotation",
 			"container", ctr.Name,
@@ -426,6 +459,11 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	// per-device entries the MPS memory limit needs.
 	visibleDevices := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
 	pinnedMemLimit := injection.PinnedDeviceMemLimit(gpuMemoryCfg.Limit, injection.DeviceCount(visibleDevices))
+
+	pipeSource, pipeDestination, mpsNamespace, err := p.mpsPipeMount(ctx, pod, ctr, computeMode, computePercent, hasComputeCap, visibleDevices)
+	if err != nil {
+		return nil, err
+	}
 
 	adj := &api.ContainerAdjustment{}
 
@@ -482,12 +520,98 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		"limit", gpuMemoryCfg.Limit,
 		"mpsPinnedMemoryLimit", pinnedMemLimit,
 		"mpsActiveThreadPercent", computePercent,
+		"mpsNamespace", mpsNamespace,
+		"mpsPipeSource", pipeSource,
 		"visibleDevices", visibleDevices,
 		"computeMode", computeMode,
 		"nvmlShimDir", p.NVMLShimHostDir,
 	)
 
 	return adj, nil
+}
+
+// mpsPipeMount decides which MPS socket directory the container is bind-mounted,
+// provisioning a namespace for it when one is called for.
+//
+// An sm-sharing container gets a namespace of its own, because that is the only
+// place a compute cap can be enforced: a per-namespace active-thread percentage
+// is a ceiling the container cannot raise, while the env var it used to get
+// instead is advisory and can be re-exported by anything inside the container.
+// The namespace's pipe directory — read back from the control daemon by mpsd,
+// never derived here — is mounted, and ONLY it: the server directory above it
+// carries the uncapped `default` namespace.
+//
+// A container with no compute portion still gets its own namespace, capped at
+// 100%. That keeps the shared server's `default` namespace empty, so it can be
+// capped low as defence in depth without penalising anyone who legitimately
+// belongs there — nobody does.
+//
+// A provisioning failure BLOCKS the container, whatever FailOpen says. FailOpen
+// is about malformed input, where the choice is between one bad pod and a node
+// full of stuck pods. This is about the enforcement plane being unavailable,
+// where starting the container anyway would put an uncapped tenant on a GPU
+// other tenants are using — the precise outcome the namespace exists to
+// prevent. A pod that will not start is visible and fixable; a pod that quietly
+// took the whole card is neither.
+func (p *Plugin) mpsPipeMount(
+	ctx context.Context,
+	pod *api.PodSandbox,
+	ctr *api.Container,
+	computeMode annotations.ComputeMode,
+	computePercent int,
+	hasComputeCap bool,
+	visibleDevices string,
+) (source, destination, namespace string, err error) {
+	if computeMode != annotations.ComputeModeSMSharing || p.provisioner == nil {
+		source, destination = injection.MPSPipeMount(p.MPSPipeDirectory, computeMode)
+		return source, destination, "", nil
+	}
+
+	// No annotated portion means no cap was asked for, which is 100% — not a
+	// reason to skip the namespace and fall back to a shared socket.
+	percent := 100
+	if hasComputeCap {
+		percent = computePercent
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, p.mpsdCallBudget())
+	defer cancel()
+
+	resp, err := p.provisioner.Provision(callCtx, mpsdrain.ProvisionRequest{
+		ContainerID:         ctr.GetId(),
+		ActiveThreadPercent: percent,
+		GPUUUIDs:            splitDevices(visibleDevices),
+		Pod:                 pod.GetName(),
+		Namespace:           pod.GetNamespace(),
+	})
+	if err != nil {
+		p.Log.Error("failed to provision an MPS namespace; refusing to create an sm-sharing container without an enforceable compute cap",
+			"container", ctr.Name,
+			"pod", pod.Name,
+			"activeThreadPercent", percent,
+			"error", err,
+		)
+		return "", "", "", fmt.Errorf("container %q in pod %q: provisioning its MPS namespace: %w", ctr.Name, pod.Name, err)
+	}
+	if resp.PipeDirectory == "" {
+		return "", "", "", fmt.Errorf("container %q in pod %q: mpsd returned no MPS namespace pipe directory", ctr.Name, pod.Name)
+	}
+
+	source, destination = injection.MPSNamespaceMount(resp.PipeDirectory)
+	return source, destination, resp.Namespace, nil
+}
+
+// splitDevices turns the scheduler's comma-separated device assignment into a
+// list. The entries are opaque here (UUIDs, CDI names or indices — see
+// annotations.ParseVisibleDevices) and are passed to mpsd for diagnostics only.
+func splitDevices(visibleDevices string) []string {
+	var devices []string
+	for device := range strings.SplitSeq(visibleDevices, ",") {
+		if device = strings.TrimSpace(device); device != "" {
+			devices = append(devices, device)
+		}
+	}
+	return devices
 }
 
 // setEnforcedEnv records "set key=value, and mine wins" on the adjustment.
@@ -630,7 +754,7 @@ func (p *Plugin) StopContainer(ctx context.Context, pod *api.PodSandbox, ctr *ap
 		return nil, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, p.drainBudget())
+	ctx, cancel := context.WithTimeout(ctx, p.mpsdCallBudget())
 	defer cancel()
 
 	resp, err := p.drainer.Drain(ctx, mpsdrain.Request{
@@ -669,10 +793,77 @@ func (p *Plugin) StopContainer(ctx context.Context, pod *api.PodSandbox, ctr *ap
 	return nil, nil
 }
 
-// RemoveContainer drops the container's mapping when the runtime removes it.
-func (p *Plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.Container) error {
+// RemoveContainer drops the container's mapping when the runtime removes it,
+// and gives its MPS namespace back.
+//
+// The release is here rather than in StopContainer, and the ordering is the
+// reason: a namespace with an active client cannot be deleted, and at
+// StopContainer time the container's processes are still alive — StopContainer
+// is where they are drained, not where they end. RemoveContainer runs after the
+// runtime has torn the container down, so the drain has already happened and
+// the client is gone. Putting the release in the earlier hook would make every
+// delete fail on the first attempt and rely entirely on mpsd's retry.
+//
+// The mapping is dropped regardless of what the release does. A namespace that
+// cannot be released is mpsd's problem to retry and eventually reclaim; holding
+// the container's metrics mapping open over it would only add a second stale
+// record.
+func (p *Plugin) RemoveContainer(ctx context.Context, pod *api.PodSandbox, ctr *api.Container) error {
 	p.events.Delete(ctr.GetId())
+	p.releaseNamespace(ctx, pod, ctr)
 	return nil
+}
+
+// releaseNamespace hands the container's MPS namespace back to mpsd.
+//
+// Failures are logged and stepped over: the container is already gone, there is
+// nothing to protect by escalating, and mpsd reclaims the namespaces of
+// containers that have disappeared during its own sweep — so the worst case of
+// a lost release is a name held for a while, not a leak.
+func (p *Plugin) releaseNamespace(ctx context.Context, pod *api.PodSandbox, ctr *api.Container) {
+	if p.provisioner == nil || ctr.GetId() == "" {
+		return
+	}
+
+	// Skip the containers that provably never had a namespace. RemoveContainer
+	// fires for every container on the node, most of which have nothing to do
+	// with GPUs, and a socket round trip each would be a lot of nothing.
+	//
+	// The test is deliberately the weakest one that is still sound — "this
+	// container has no GPU-memory annotations", the same signal the create hook
+	// gates on — and anything it cannot answer falls through to a release. A
+	// release for a container that holds no namespace is a cheap no-op at the
+	// other end; a release skipped for one that does is a namespace held until
+	// mpsd's sweep notices the container is gone.
+	if cfg, err := annotations.ParseGPUMemoryAnnotations(pod.GetAnnotations(), ctr.GetName(), p.AnnotationPrefix); err == nil && cfg.IsEmpty() {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, p.mpsdCallBudget())
+	defer cancel()
+
+	resp, err := p.provisioner.Release(ctx, mpsdrain.ReleaseRequest{
+		ContainerID: ctr.GetId(),
+		Pod:         pod.GetName(),
+		Namespace:   pod.GetNamespace(),
+	})
+	if err != nil {
+		p.Log.Warn("failed to release the container's MPS namespace; mpsd will reclaim it",
+			"container", ctr.GetName(),
+			"pod", pod.GetName(),
+			"error", err,
+		)
+		return
+	}
+	if resp.Namespace != "" || resp.Deleted {
+		p.Log.Info("released the container's MPS namespace",
+			"container", ctr.GetName(),
+			"pod", pod.GetName(),
+			"mpsNamespace", resp.Namespace,
+			"deleted", resp.Deleted,
+			"message", resp.Message,
+		)
+	}
 }
 
 // Shutdown flushes any queued mapping events and waits for in-flight
@@ -687,10 +878,13 @@ func (p *Plugin) Shutdown(_ context.Context) {
 }
 
 // Flush blocks until all queued mapping events have been applied and any
-// in-flight remediation has finished. Used by tests and graceful shutdown.
-func (p *Plugin) Flush() {
-	p.events.Flush()
+// in-flight remediation has finished. Used by tests and graceful shutdown. It
+// reports whether the mapping flush completed within its budget (see
+// events.Processor.Flush).
+func (p *Plugin) Flush() bool {
+	flushed := p.events.Flush()
 	if p.sentinel != nil {
 		p.sentinel.Wait()
 	}
+	return flushed
 }

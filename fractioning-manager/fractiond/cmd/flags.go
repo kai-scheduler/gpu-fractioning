@@ -67,8 +67,11 @@ type cliFlags struct {
 	// mpsDrainSocket is mpsd's MPS client-drain endpoint; empty disables the
 	// drain-before-stop call.
 	mpsDrainSocket string
-	// mpsDrainTimeout bounds the drain call made from StopContainer.
+	// mpsDrainTimeout bounds the calls made to mpsd from the NRI hooks.
 	mpsDrainTimeout time.Duration
+	// namespaceIsolation asks mpsd for a capped MPS namespace per sm-sharing
+	// container instead of pointing them all at one shared, uncapped socket.
+	namespaceIsolation bool
 	// nvmlShim stages the shadow NVML library onto the host and mounts it into
 	// GPU-fractioning containers so their NVML view is capped too.
 	nvmlShim bool
@@ -100,7 +103,10 @@ func parseFlags() cliFlags {
 		"mpsd socket used to drain a container's MPS clients before it is stopped (empty disables the drain)")
 	flag.DurationVar(&f.mpsDrainTimeout, "mps-drain-timeout",
 		env.Duration("MPS_DRAIN_TIMEOUT", mpsdrain.DefaultCallTimeout),
-		"how long StopContainer waits for the MPS drain before letting the stop proceed")
+		"how long an NRI hook waits for mpsd (draining a container's MPS clients, provisioning or releasing its MPS namespace) before giving up")
+	flag.BoolVar(&f.namespaceIsolation, "namespace-isolation",
+		env.Bool("NAMESPACE_ISOLATION", true),
+		"ask mpsd for a per-container MPS namespace capped at the container's compute portion, which MPS enforces and the container cannot raise; disabling it falls back to the advisory CUDA_MPS_ACTIVE_THREAD_PERCENTAGE env var alone")
 	// On by default: without the shim, nvidia-smi inside a capped container
 	// reports the whole physical GPU and every co-tenant's memory, which is a
 	// live reporting bug rather than a new capability. The library is designed

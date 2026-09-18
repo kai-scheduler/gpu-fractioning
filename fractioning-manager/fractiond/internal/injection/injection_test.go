@@ -4,11 +4,13 @@
 package injection
 
 import (
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
@@ -456,5 +458,48 @@ func TestPinnedDeviceMemLimitMatchesDeviceCount(t *testing.T) {
 	// may not even have.
 	if got := PinnedDeviceMemLimit("4096", DeviceCount("")); got != "" {
 		t.Errorf("unassigned container got a pinned memory limit %q, want none", got)
+	}
+}
+
+// TestMPSNamespaceMountBindsOnlyTheLeafDirectory.
+//
+// The source has to be the namespace's own pipe directory and nothing above it.
+// Its parent is the MPS server's directory, which carries the server's
+// `default` namespace — uncapped, with its own control socket — so a container
+// mounted one level up can reach an unlimited namespace while appearing to be
+// correctly isolated. The destination is the same fixed in-container path
+// time-sharing-agnostic code already uses, so the container never learns
+// anything about the host-side server or namespace naming.
+func TestMPSNamespaceMountBindsOnlyTheLeafDirectory(t *testing.T) {
+	const namespaceDir = "/run/nvidia-mps/shared/kai_abc123_0011223344"
+
+	source, destination := MPSNamespaceMount(namespaceDir)
+
+	if source != namespaceDir {
+		t.Errorf("source = %q, want the namespace directory %q", source, namespaceDir)
+	}
+	if source == filepath.Dir(namespaceDir) {
+		t.Error("the server directory was mounted; its default namespace is uncapped")
+	}
+	if destination != configuration.ContainerMPSPipeDirectory {
+		t.Errorf("destination = %q, want the fixed in-container path %q", destination, configuration.ContainerMPSPipeDirectory)
+	}
+	if strings.Contains(destination, "kai_") {
+		t.Errorf("destination = %q leaks the host-side namespace name into the container", destination)
+	}
+}
+
+// TestMPSNamespaceMountDestinationMatchesTheSMSharingFallback: the audit and
+// the create hook both key on the in-container destination, and a node can be
+// running containers from both shapes at once (namespace isolation switched on
+// or off between their creations). The destination must therefore be the same
+// either way.
+func TestMPSNamespaceMountDestinationMatchesTheSMSharingFallback(t *testing.T) {
+	_, namespaceDestination := MPSNamespaceMount("/run/nvidia-mps/shared/kai_a_1")
+	_, fallbackDestination := MPSPipeMount("/run/nvidia-mps", annotations.ComputeModeSMSharing)
+
+	if namespaceDestination != fallbackDestination {
+		t.Errorf("namespace mount lands on %q but the fallback lands on %q; a container created under one and audited under the other would look unmounted",
+			namespaceDestination, fallbackDestination)
 	}
 }
