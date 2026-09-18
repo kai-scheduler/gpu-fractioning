@@ -21,8 +21,33 @@ RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go buil
 # statically-linked Go binary with no GPU or OS-level dependencies — it only
 # communicates via the NRI Unix socket — so nothing from the base is needed
 # beyond a filesystem to run in, and no OS packages are added.
+# The NVML shadow library fractiond stages onto the host and bind-mounts into
+# GPU containers. It forwards through hand-written x86-64 trampolines, so it
+# builds on that architecture only; its Makefile emits nothing elsewhere and the
+# stage below then ships an empty directory. fractiond treats a missing library
+# as "feature off" and keeps running, so an arm64 image loses the capped
+# nvidia-smi view but nothing else.
+#
+# Built natively rather than under --platform=$TARGETPLATFORM to avoid dragging
+# qemu into the build for the one architecture that produces no output anyway.
+# The TARGETARCH/uname pair is what prevents the opposite failure: silently
+# copying an amd64 object into an arm64 image when cross-compiling.
+FROM --platform=$BUILDPLATFORM golang:1.27 AS shimbuilder
+ARG TARGETARCH
+WORKDIR /shim
+COPY fractioning-manager/nvmlshim/ ./
+RUN mkdir -p /shimout && \
+    if [ "$TARGETARCH" = "amd64" ] && [ "$(uname -m)" = "x86_64" ]; then \
+        make && cp build/libnvidia-ml.so.1 /shimout/; \
+    else \
+        echo "nvmlshim: skipping build (TARGETARCH=$TARGETARCH on $(uname -m))"; \
+    fi
+
 FROM nvcr.io/nvidia/distroless/go:v4.1.3
 COPY --from=builder /workspace/fractiond /fractiond
+# Trailing slash on the source: copies the directory's contents, and tolerates
+# it being empty on architectures where the shim is not built.
+COPY --from=shimbuilder /shimout/ /usr/lib/gpu-fractioning/
 # Attribution for the third-party code statically linked into the binary.
 COPY THIRD-PARTY.txt /THIRD-PARTY.txt
 # Root, because the NRI socket fractiond connects to is root-owned. The base
