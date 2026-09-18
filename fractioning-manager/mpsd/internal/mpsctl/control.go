@@ -167,7 +167,11 @@ const (
 	// the namespace directory, say — silently lands in the uncapped `default`
 	// namespace. A guess that is wrong fails loudly here; a guess that is
 	// wrong-but-plausible fails silently on the GPU.
-	pipeDirectoryField = "pipe_directory"
+	//
+	// The name is hyphenated, matching `namespace get --help` on driver 615:
+	//   FIELDS: name, server, server-status, pipe-directory,
+	//           pinned-memory-limit, active-thread-percentage, client-priority
+	pipeDirectoryField = "pipe-directory"
 )
 
 // namespaceNamePattern is the only shape the control daemon accepts for a

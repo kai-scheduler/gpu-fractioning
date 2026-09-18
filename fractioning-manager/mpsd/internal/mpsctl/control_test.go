@@ -537,7 +537,7 @@ func TestNamespaceCommandArgs(t *testing.T) {
 				_, err := c.NamespacePipeDirectory(context.Background(), "shared", "kai_abc_0011")
 				return err
 			},
-			want: []string{"-p", "3", "namespace", "get", "kai_abc_0011", "shared", "pipe_directory"},
+			want: []string{"-p", "3", "namespace", "get", "kai_abc_0011", "shared", "pipe-directory"},
 		},
 		{
 			name: "list",
@@ -640,8 +640,8 @@ func TestParseAbsolutePath(t *testing.T) {
 		want string
 	}{
 		{name: "bare value", out: "/run/nvidia-mps/shared/kai_a_1\n", want: "/run/nvidia-mps/shared/kai_a_1"},
-		{name: "key and value", out: "pipe_directory: /run/nvidia-mps/shared/kai_a_1\n", want: "/run/nvidia-mps/shared/kai_a_1"},
-		{name: "key=value", out: "pipe_directory=/run/nvidia-mps/shared/kai_a_1", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "key and value", out: "pipe-directory: /run/nvidia-mps/shared/kai_a_1\n", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "key=value", out: "pipe-directory=/run/nvidia-mps/shared/kai_a_1", want: "/run/nvidia-mps/shared/kai_a_1"},
 		{name: "quoted", out: `"/run/nvidia-mps/shared/kai_a_1"`, want: "/run/nvidia-mps/shared/kai_a_1"},
 		{name: "csv row", out: "kai_a_1,shared,/run/nvidia-mps/shared/kai_a_1", want: "/run/nvidia-mps/shared/kai_a_1"},
 		{name: "trailing slash is cleaned", out: "/run/nvidia-mps/shared/kai_a_1/", want: "/run/nvidia-mps/shared/kai_a_1"},
