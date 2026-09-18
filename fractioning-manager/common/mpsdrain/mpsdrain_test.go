@@ -316,7 +316,7 @@ func TestClientReportsAMissingSocket(t *testing.T) {
 	if !strings.Contains(err.Error(), missing) {
 		t.Errorf("error %v does not name the socket", err)
 	}
-	if !strings.Contains(err.Error(), "calling MPS drain endpoint") {
+	if !strings.Contains(err.Error(), "calling mpsd drain endpoint") {
 		t.Errorf("error %v does not say what it was doing", err)
 	}
 }
