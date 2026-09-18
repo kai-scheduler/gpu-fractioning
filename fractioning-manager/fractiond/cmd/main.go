@@ -18,7 +18,9 @@ import (
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/audit"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/nvmlshim"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 )
 
 func main() {
@@ -54,9 +56,13 @@ func main() {
 		logger.Warn("MPS drain before container stop disabled; a container killed with GPU work in flight can wedge MPS for every other tenant of its GPU")
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+
 	plugin, err := internal.NewPlugin(internal.Config{
 		AnnotationPrefix:       flags.annotationPrefix,
 		MPSPipeDirectory:       flags.mpsPipeDir,
+		NVMLShimHostDir:        stageNVMLShim(ctx, flags, logger),
 		FailOpen:               flags.failOpen,
 		SupportSMSharing:       flags.supportSMSharing,
 		RetroactiveEnforcement: flags.retroactiveEnforcement,
@@ -73,9 +79,6 @@ func main() {
 	}
 
 	logger.Info("container→pod mapping handoff directory", "mapDir", flags.mapDir)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
 
 	if flags.readinessPort > 0 {
 		go func() {
@@ -99,6 +102,29 @@ func main() {
 	}
 
 	logger.Info("fractiond shutdown complete")
+}
+
+// stageNVMLShim copies the shadow NVML library out of the fractiond image onto
+// the host and returns the directory the create hook should bind-mount from, or
+// "" when the shim must not be used.
+//
+// A failure here is a warning, never a startup failure. The GPU caps are
+// enforced by MPS and the container toolkit with or without the shim; all that
+// is lost is that nvidia-smi inside a container keeps reporting the whole
+// physical GPU. Exiting over it would trade a cosmetic-but-confusing reporting
+// bug for a node with no GPU fractioning at all.
+func stageNVMLShim(ctx context.Context, flags cliFlags, logger *slog.Logger) string {
+	if !flags.nvmlShim {
+		logger.Info("NVML shim disabled; nvidia-smi inside fractional containers will report the whole physical GPU and every co-tenant's memory")
+		return ""
+	}
+
+	if _, err := nvmlshim.Stage(ctx, flags.nvmlShimSource, daemonpaths.NVMLShimDir, logger); err != nil {
+		logger.Warn("failed to stage the NVML shim; continuing without it. GPU caps are still enforced, but nvidia-smi inside fractional containers will report the whole physical GPU",
+			"source", flags.nvmlShimSource, "destination", daemonpaths.NVMLShimDir, "error", err)
+		return ""
+	}
+	return daemonpaths.NVMLShimDir
 }
 
 // runWithRetry connects to the NRI runtime and runs the plugin. If the

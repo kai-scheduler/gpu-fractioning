@@ -11,6 +11,8 @@ import (
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/nvmlshim"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
 )
 
@@ -67,6 +69,11 @@ type cliFlags struct {
 	mpsDrainSocket string
 	// mpsDrainTimeout bounds the drain call made from StopContainer.
 	mpsDrainTimeout time.Duration
+	// nvmlShim stages the shadow NVML library onto the host and mounts it into
+	// GPU-fractioning containers so their NVML view is capped too.
+	nvmlShim bool
+	// nvmlShimSource is where the shim lives inside the fractiond image.
+	nvmlShimSource string
 }
 
 func parseFlags() cliFlags {
@@ -94,6 +101,15 @@ func parseFlags() cliFlags {
 	flag.DurationVar(&f.mpsDrainTimeout, "mps-drain-timeout",
 		env.Duration("MPS_DRAIN_TIMEOUT", mpsdrain.DefaultCallTimeout),
 		"how long StopContainer waits for the MPS drain before letting the stop proceed")
+	// On by default: without the shim, nvidia-smi inside a capped container
+	// reports the whole physical GPU and every co-tenant's memory, which is a
+	// live reporting bug rather than a new capability. The library is designed
+	// to fail open, and a staging failure disables the feature by itself, so the
+	// worst case of the default is the behaviour that exists today.
+	flag.BoolVar(&f.nvmlShim, "nvml-shim", env.Bool("NVML_SHIM", true),
+		"stage the shadow NVML library onto the host and mount it into GPU-fractioning containers so nvidia-smi reports the container's share instead of the whole device")
+	flag.StringVar(&f.nvmlShimSource, "nvml-shim-source", env.String("NVML_SHIM_SOURCE", nvmlshim.DefaultSourcePath),
+		"path to the shadow NVML library inside the fractiond image, staged to "+daemonpaths.NVMLShimDir+" on the host")
 	flag.Parse()
 	return f
 }

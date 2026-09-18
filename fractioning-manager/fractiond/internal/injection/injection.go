@@ -63,6 +63,28 @@ const (
 	// enforced limit; on a cluster with both, they are set to the same value, so
 	// whichever binds first binds at the right number.
 	EnvMPSPinnedDeviceMemLimit = "CUDA_MPS_PINNED_DEVICE_MEM_LIMIT"
+
+	// EnvLDLibraryPath is the dynamic loader's search path, prepended with
+	// ContainerNVMLShimDir so the shadow libnvidia-ml.so.1 staged on the host is
+	// found ahead of the driver's own copy.
+	//
+	// The caps above are enforced at the CUDA layer by MPS, which NVML does not
+	// go through: nvidia-smi inside a capped container still reports the whole
+	// physical device and the memory every co-tenant is using. The shim answers
+	// those queries with a container-scoped, capped view. It has to arrive via
+	// the search path rather than LD_PRELOAD because nvidia-smi dlopens NVML and
+	// resolves through dlsym on that handle, which interposition does not reach.
+	//
+	// Unlike every other key here this one is merged, not set — see
+	// PrependLibraryPath and the EnforcementEnvKeys doc below.
+	EnvLDLibraryPath = "LD_LIBRARY_PATH"
+
+	// ContainerNVMLShimDir is the fixed in-container directory the host shim
+	// directory (daemonpaths.NVMLShimDir) is bind-mounted at, read-only. Fixed
+	// rather than an identity mount so the container's loader path never has to
+	// name a host layout, and namespaced under /opt so it cannot collide with a
+	// distribution library directory the image already populates.
+	ContainerNVMLShimDir = "/opt/gpu-fractioning/lib"
 )
 
 // AllEnvKeys lists every env-var key the create hook may inject. Consumers that
@@ -76,6 +98,7 @@ var AllEnvKeys = []string{
 	EnvVisibleDevices,
 	EnvMPSActiveThreadPercentage,
 	EnvMPSPinnedDeviceMemLimit,
+	EnvLDLibraryPath,
 }
 
 // EnforcementEnvKeys lists the injected env vars that carry a limit rather than
@@ -92,6 +115,15 @@ var AllEnvKeys = []string{
 // it. Stripping a self-imposed limit and putting nothing back would turn a
 // workload that voluntarily capped itself into an unbounded one, which is the
 // opposite of what this package is for.
+//
+// LD_LIBRARY_PATH is deliberately absent, and the reason is stronger than "it
+// is not a limit". A GPU container under the NVIDIA container runtime arrives
+// already carrying LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64,
+// set by the runtime itself (observed on a live pod). Remove-then-replace
+// semantics would delete the runtime's own library search paths from every GPU
+// container on the node, breaking library resolution for the workload — a far
+// worse failure than the capped-reporting bug the shim fixes. The key is
+// merged instead: see PrependLibraryPath.
 var EnforcementEnvKeys = []string{
 	EnvGPUMemoryRequest,
 	EnvGPUMemoryLimit,
@@ -149,6 +181,50 @@ func DeviceCount(visibleDevices string) int {
 		}
 	}
 	return count
+}
+
+// PrependLibraryPath merges dir into a colon-separated LD_LIBRARY_PATH,
+// returning the new value and whether it differs from existing.
+//
+//	PrependLibraryPath("/usr/local/nvidia/lib:/usr/local/nvidia/lib64", "/opt/gpu-fractioning/lib")
+//	  → "/opt/gpu-fractioning/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64", true
+//
+// Merge rather than replace, because the variable is a list and the entries
+// already in it are load-bearing: the NVIDIA container runtime puts its own
+// driver library directories there, so overwriting would cost the workload the
+// paths its CUDA stack resolves through. Prepend rather than append, because
+// position is the entire mechanism — the shim only shadows the real NVML if the
+// loader reaches it first.
+//
+// changed=false when dir is already the leading entry, so a container that has
+// been through this once (or whose image happens to lead with the same path)
+// produces no adjustment entry at all rather than a duplicated prefix that
+// grows on every pass.
+func PrependLibraryPath(existing, dir string) (value string, changed bool) {
+	if dir == "" {
+		return existing, false
+	}
+	if existing == "" {
+		return dir, true
+	}
+
+	entries := strings.Split(existing, ":")
+	if entries[0] == dir {
+		return existing, false
+	}
+
+	// A later occurrence is dropped rather than left in place: keeping it would
+	// leave the same directory listed twice, and the loader would search it
+	// twice on every unresolved symbol.
+	kept := make([]string, 0, len(entries)+1)
+	kept = append(kept, dir)
+	for _, entry := range entries {
+		if entry == dir {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return strings.Join(kept, ":"), true
 }
 
 // MPSPipeMount returns the MPS pipe bind-mount source (host path) and

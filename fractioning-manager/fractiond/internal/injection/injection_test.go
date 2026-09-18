@@ -28,6 +28,10 @@ func TestInjectedEnvNames(t *testing.T) {
 		// server, so a typo silently means "no limit".
 		"EnvMPSActiveThreadPercentage": "CUDA_MPS_ACTIVE_THREAD_PERCENTAGE",
 		"EnvMPSPinnedDeviceMemLimit":   "CUDA_MPS_PINNED_DEVICE_MEM_LIMIT",
+		// The loader's own name. The shim is found by being first on this
+		// search path and by nothing else, so a typo here is a shim that is
+		// staged, mounted, and never loaded.
+		"EnvLDLibraryPath": "LD_LIBRARY_PATH",
 	}
 	got := map[string]string{
 		"EnvGPUMemoryRequest":          EnvGPUMemoryRequest,
@@ -36,6 +40,7 @@ func TestInjectedEnvNames(t *testing.T) {
 		"EnvVisibleDevices":            EnvVisibleDevices,
 		"EnvMPSActiveThreadPercentage": EnvMPSActiveThreadPercentage,
 		"EnvMPSPinnedDeviceMemLimit":   EnvMPSPinnedDeviceMemLimit,
+		"EnvLDLibraryPath":             EnvLDLibraryPath,
 	}
 	for name, wantValue := range want {
 		if got[name] != wantValue {
@@ -80,10 +85,128 @@ func TestInjectedEnvNames(t *testing.T) {
 	// carries no limit, and it is unconditionally injected, so it has no
 	// business in the enforcement list. NVIDIA_VISIBLE_DEVICES is conditional
 	// on the scheduler's device assignment and is handled on its own terms.
-	for _, key := range []string{EnvMPSPipeDirectory, EnvVisibleDevices} {
+	//
+	// LD_LIBRARY_PATH is the one whose presence here would do real damage. A
+	// GPU container comes out of the NVIDIA container runtime already carrying
+	// LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64, so
+	// remove-then-replace would delete the runtime's own driver search paths
+	// from every GPU container on the node.
+	for _, key := range []string{EnvMPSPipeDirectory, EnvVisibleDevices, EnvLDLibraryPath} {
 		if slices.Contains(EnforcementEnvKeys, key) {
 			t.Errorf("EnforcementEnvKeys contains %q, which is a location, not a limit", key)
 		}
+	}
+}
+
+// TestPrependLibraryPath pins the merge the shim injection depends on. The
+// hazard it guards is asymmetric: getting the order wrong only costs the
+// reporting fix, while losing an entry costs the workload the driver libraries
+// the NVIDIA container runtime put there.
+func TestPrependLibraryPath(t *testing.T) {
+	const shim = ContainerNVMLShimDir
+
+	tests := []struct {
+		name        string
+		existing    string
+		dir         string
+		want        string
+		wantChanged bool
+	}{
+		{
+			name:        "unset gets only our path",
+			existing:    "",
+			dir:         shim,
+			want:        shim,
+			wantChanged: true,
+		},
+		{
+			// The value observed in a GPU container under the NVIDIA container
+			// runtime, before any fractiond injection. Kept verbatim because it
+			// is the case that actually occurs on every GPU pod, not a
+			// hypothetical one.
+			name:        "nvidia container runtime defaults survive in order",
+			existing:    "/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+			dir:         shim,
+			want:        shim + ":/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+			wantChanged: true,
+		},
+		{
+			name:        "workload paths survive in order",
+			existing:    "/foo:/bar",
+			dir:         shim,
+			want:        shim + ":/foo:/bar",
+			wantChanged: true,
+		},
+		{
+			name:        "already first is a no-op",
+			existing:    shim + ":/usr/local/nvidia/lib",
+			dir:         shim,
+			want:        shim + ":/usr/local/nvidia/lib",
+			wantChanged: false,
+		},
+		{
+			name:        "already present but not first is promoted, not duplicated",
+			existing:    "/foo:" + shim + ":/bar",
+			dir:         shim,
+			want:        shim + ":/foo:/bar",
+			wantChanged: true,
+		},
+		{
+			name:        "single unrelated entry",
+			existing:    "/foo",
+			dir:         shim,
+			want:        shim + ":/foo",
+			wantChanged: true,
+		},
+		{
+			// An empty entry means "the current directory" to the loader. It is
+			// the workload's business, not ours, so it is carried through
+			// untouched rather than tidied away.
+			name:        "empty entries are preserved",
+			existing:    ":/foo:",
+			dir:         shim,
+			want:        shim + "::/foo:",
+			wantChanged: true,
+		},
+		{
+			name:        "no directory to prepend leaves the value alone",
+			existing:    "/foo:/bar",
+			dir:         "",
+			want:        "/foo:/bar",
+			wantChanged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := PrependLibraryPath(tt.existing, tt.dir)
+			if got != tt.want {
+				t.Errorf("PrependLibraryPath(%q, %q) = %q, want %q", tt.existing, tt.dir, got, tt.want)
+			}
+			if changed != tt.wantChanged {
+				t.Errorf("PrependLibraryPath(%q, %q) changed = %v, want %v", tt.existing, tt.dir, changed, tt.wantChanged)
+			}
+		})
+	}
+}
+
+// TestPrependLibraryPathIsIdempotent checks the property the table above can
+// only sample: the create hook runs again on every container restart, and a
+// merge that grew the value each time would eventually produce a search path
+// long enough to slow every symbol resolution in the container.
+func TestPrependLibraryPathIsIdempotent(t *testing.T) {
+	const existing = "/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+	once, changed := PrependLibraryPath(existing, ContainerNVMLShimDir)
+	if !changed {
+		t.Fatalf("the first merge reported no change to %q", existing)
+	}
+	twice, changed := PrependLibraryPath(once, ContainerNVMLShimDir)
+	if changed {
+		t.Errorf("merging into an already-merged value reported a change: %q -> %q", once, twice)
+	}
+	if twice != once {
+		t.Errorf("merging twice = %q, want %q", twice, once)
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/injection"
+	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/daemonpaths"
 )
 
 func TestCreateContainer(t *testing.T) {
@@ -2077,4 +2078,299 @@ func withoutEnv(env []string, key string) []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// ---------------------------------------------------------------------------
+// NVML shim delivery: the read-only bind mount of the staged shadow
+// libnvidia-ml.so.1 and the LD_LIBRARY_PATH merge that makes the loader find
+// it ahead of the driver's own copy.
+// ---------------------------------------------------------------------------
+
+// shimPlugin is newTestPlugin with the NVML shim host directory configured, the
+// state fractiond reaches once staging has succeeded.
+func shimPlugin(t *testing.T) *Plugin {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	p, err := NewPlugin(Config{
+		AnnotationPrefix: configuration.DefaultAnnotationPrefix,
+		MPSPipeDirectory: configuration.DefaultMPSPipeDirectory,
+		NVMLShimHostDir:  daemonpaths.NVMLShimDir,
+		SupportSMSharing: true,
+		MapDir:           t.TempDir(),
+		Log:              log,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewPlugin: %v", err)
+	}
+	return p
+}
+
+// mountTo returns the adjustment's mount at the given in-container destination,
+// or nil.
+func mountTo(adj *api.ContainerAdjustment, destination string) *api.Mount {
+	for _, m := range adj.GetMounts() {
+		if m.GetDestination() == destination {
+			return m
+		}
+	}
+	return nil
+}
+
+// TestCreateContainerDeliversTheNVMLShim covers the delivery mechanism end to
+// end for each shape of LD_LIBRARY_PATH a container can arrive with.
+//
+// The merge cases are the ones that matter. A GPU container comes out of the
+// NVIDIA container runtime with the runtime's own driver directories already in
+// LD_LIBRARY_PATH, so the overwrite semantics used for the MPS caps would strip
+// the workload of the libraries its CUDA stack resolves through — a far worse
+// outcome than the capped-reporting bug the shim exists to fix.
+func TestCreateContainerDeliversTheNVMLShim(t *testing.T) {
+	const shimDir = injection.ContainerNVMLShimDir
+
+	tests := []struct {
+		name string
+		// containerEnv is the container's own env, exactly as its spec declares it.
+		containerEnv []string
+		// wantValue is the LD_LIBRARY_PATH the adjustment must set; "" means the
+		// adjustment must not mention the key at all.
+		wantValue string
+		// wantApplied is the value a tenant sees once the runtime has applied
+		// the adjustment.
+		wantApplied string
+	}{
+		{
+			name:        "no existing value gets only the shim directory",
+			wantValue:   shimDir,
+			wantApplied: shimDir,
+		},
+		{
+			// Observed on a live GPU pod under the NVIDIA container runtime
+			// (RuntimeClass nvidia), before any fractiond injection. This is
+			// what every GPU container on the node actually looks like, so it
+			// is the case the merge has to get right.
+			name:         "the NVIDIA container runtime's own paths survive in order",
+			containerEnv: []string{injection.EnvLDLibraryPath + "=/usr/local/nvidia/lib:/usr/local/nvidia/lib64"},
+			wantValue:    shimDir + ":/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+			wantApplied:  shimDir + ":/usr/local/nvidia/lib:/usr/local/nvidia/lib64",
+		},
+		{
+			name:         "a workload's own paths survive in order",
+			containerEnv: []string{injection.EnvLDLibraryPath + "=/foo:/bar"},
+			wantValue:    shimDir + ":/foo:/bar",
+			wantApplied:  shimDir + ":/foo:/bar",
+		},
+		{
+			// Idempotency. The create hook runs again on every container
+			// restart, and a merge that prepended unconditionally would grow
+			// the search path without bound.
+			name:         "the shim directory is not prepended twice",
+			containerEnv: []string{injection.EnvLDLibraryPath + "=" + shimDir + ":/usr/local/nvidia/lib"},
+			wantValue:    "",
+			wantApplied:  shimDir + ":/usr/local/nvidia/lib",
+		},
+		{
+			// A bare declaration with no '=' is a legitimate OCI form and means
+			// an empty value, so the merge has nothing to preserve.
+			name:         "a bare declaration is replaced by the shim directory",
+			containerEnv: []string{injection.EnvLDLibraryPath},
+			wantValue:    shimDir,
+			wantApplied:  shimDir,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := shimPlugin(t)
+			pod := &api.PodSandbox{
+				Name:        "test-pod",
+				Annotations: map[string]string{limitAnnotation: "4Gi", devicesAnnotation: "GPU-abc123"},
+			}
+			ctr := &api.Container{Name: "trainer", Env: append(slices.Clone(tt.containerEnv), "UNRELATED=keep-me")}
+
+			adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if adj == nil {
+				t.Fatal("expected non-nil adjustment, got nil")
+			}
+
+			// The mount is unconditional: it is what puts the library on the
+			// path the loader is about to be pointed at, so it must be there
+			// even in the case where the env needs no change.
+			mount := mountTo(adj, injection.ContainerNVMLShimDir)
+			if mount == nil {
+				t.Fatalf("no mount at %q; the shim library never reaches the container. mounts = %+v",
+					injection.ContainerNVMLShimDir, adj.GetMounts())
+			}
+			if mount.GetSource() != daemonpaths.NVMLShimDir {
+				t.Errorf("shim mount source = %q, want %q", mount.GetSource(), daemonpaths.NVMLShimDir)
+			}
+			if mount.GetType() != "bind" {
+				t.Errorf("shim mount type = %q, want %q", mount.GetType(), "bind")
+			}
+			// Read-only: the library is shared by every container on the node,
+			// and fractiond replaces it by rename rather than in place, so
+			// nothing needs write access through this mount.
+			if want := []string{"bind", "ro"}; !slices.Equal(mount.GetOptions(), want) {
+				t.Errorf("shim mount options = %v, want %v", mount.GetOptions(), want)
+			}
+
+			entries := adjustmentEnv(adj)
+			if tt.wantValue == "" {
+				if at := indexOfAdd(entries, injection.EnvLDLibraryPath); at >= 0 {
+					t.Errorf("%s was set to %q, but the container's value already leads with the shim directory",
+						injection.EnvLDLibraryPath, valueOfAdd(entries, injection.EnvLDLibraryPath))
+				}
+				if at := indexOfRemoval(entries, injection.EnvLDLibraryPath); at >= 0 {
+					t.Errorf("%s was removed even though nothing was put back", injection.EnvLDLibraryPath)
+				}
+			} else {
+				if got := valueOfAdd(entries, injection.EnvLDLibraryPath); got != tt.wantValue {
+					t.Errorf("%s = %q, want %q", injection.EnvLDLibraryPath, got, tt.wantValue)
+				}
+				if n := countAdds(entries, injection.EnvLDLibraryPath); n != 1 {
+					t.Errorf("%s is set %d times, want exactly 1", injection.EnvLDLibraryPath, n)
+				}
+				// Removal before add, for the reason setEnforcedEnv documents:
+				// generate.AdjustEnv is last-entry-wins per key, so the
+				// reversed pair deletes the variable instead of rewriting it —
+				// which here would strip the NVIDIA runtime's driver paths.
+				if len(tt.containerEnv) > 0 {
+					removeAt := indexOfRemoval(entries, injection.EnvLDLibraryPath)
+					addAt := indexOfAdd(entries, injection.EnvLDLibraryPath)
+					if removeAt < 0 {
+						t.Errorf("%s: no removal of the container's own value was issued", injection.EnvLDLibraryPath)
+					}
+					if addAt < 0 {
+						t.Fatalf("%s: the adjustment never sets our value", injection.EnvLDLibraryPath)
+					}
+					if removeAt >= 0 && removeAt > addAt {
+						t.Errorf("%s: removal at index %d comes after the add at %d; the runtime would drop the variable entirely",
+							injection.EnvLDLibraryPath, removeAt, addAt)
+					}
+				}
+			}
+
+			applied := applyAdjustment(ctr, adj)
+			values := envValues(applied, injection.EnvLDLibraryPath)
+			if len(values) != 1 {
+				t.Fatalf("after applying the adjustment, %s appears %d times: %v", injection.EnvLDLibraryPath, len(values), values)
+			}
+			if values[0] != tt.wantApplied {
+				t.Errorf("after applying the adjustment, %s = %q, want %q", injection.EnvLDLibraryPath, values[0], tt.wantApplied)
+			}
+			if v := envValues(applied, "UNRELATED"); len(v) != 1 || v[0] != "keep-me" {
+				t.Errorf("an unrelated env var was disturbed: %v", v)
+			}
+		})
+	}
+}
+
+// TestCreateContainerShimDisabledTouchesNothing is the other half of the
+// feature switch, and of the failure path: staging leaves the host directory
+// unconfigured when it fails, so this is also what a node whose fractiond image
+// carries no shim library must look like. No mount, and LD_LIBRARY_PATH left
+// exactly as the container declared it — the caps still work without the shim,
+// only the reporting view degrades.
+func TestCreateContainerShimDisabledTouchesNothing(t *testing.T) {
+	const runtimePath = "/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+	p := newTestPlugin(t)
+	pod := &api.PodSandbox{
+		Name:        "test-pod",
+		Annotations: map[string]string{limitAnnotation: "4Gi", devicesAnnotation: "GPU-abc123", portionAnnotation: "0.5"},
+	}
+	ctr := &api.Container{Name: "trainer", Env: []string{injection.EnvLDLibraryPath + "=" + runtimePath}}
+
+	adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if adj == nil {
+		t.Fatal("expected non-nil adjustment, got nil")
+	}
+
+	if m := mountTo(adj, injection.ContainerNVMLShimDir); m != nil {
+		t.Errorf("a shim mount was added with the feature off: %+v", m)
+	}
+
+	entries := adjustmentEnv(adj)
+	if at := indexOfAdd(entries, injection.EnvLDLibraryPath); at >= 0 {
+		t.Errorf("%s was set to %q with the feature off", injection.EnvLDLibraryPath, valueOfAdd(entries, injection.EnvLDLibraryPath))
+	}
+	if at := indexOfRemoval(entries, injection.EnvLDLibraryPath); at >= 0 {
+		t.Errorf("%s was removed with the feature off", injection.EnvLDLibraryPath)
+	}
+
+	// The caps are unaffected: turning the shim off costs the reporting view
+	// and nothing else.
+	assertAdjustmentSets(t, adj, map[string]string{
+		injection.EnvGPUMemoryRequest:          "4096",
+		injection.EnvGPUMemoryLimit:            "4096",
+		injection.EnvMPSPinnedDeviceMemLimit:   "0=4096M",
+		injection.EnvMPSActiveThreadPercentage: "50",
+		injection.EnvVisibleDevices:            "GPU-abc123",
+		injection.EnvMPSPipeDirectory:          configuration.DefaultMPSPipeDirectory,
+	})
+
+	applied := applyAdjustment(ctr, adj)
+	if values := envValues(applied, injection.EnvLDLibraryPath); len(values) != 1 || values[0] != runtimePath {
+		t.Errorf("the container's own %s = %v, want it left as %q", injection.EnvLDLibraryPath, values, runtimePath)
+	}
+}
+
+// TestCreateContainerShimLeavesTheMPSPipeMountAlone guards the interaction
+// between the two mounts. The MPS pipe mount is what the caps themselves ride
+// on; a second mount added beside it must not displace it or change its
+// read-write access.
+func TestCreateContainerShimLeavesTheMPSPipeMountAlone(t *testing.T) {
+	p := shimPlugin(t)
+	pod := &api.PodSandbox{Name: "test-pod", Annotations: map[string]string{limitAnnotation: "4Gi"}}
+	ctr := &api.Container{Name: "trainer"}
+
+	adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	pipe := mountTo(adj, configuration.DefaultMPSPipeDirectory)
+	if pipe == nil {
+		t.Fatalf("the MPS pipe mount is gone; mounts = %+v", adj.GetMounts())
+	}
+	if pipe.GetSource() != configuration.DefaultMPSPipeDirectory {
+		t.Errorf("MPS pipe mount source = %q, want %q", pipe.GetSource(), configuration.DefaultMPSPipeDirectory)
+	}
+	if want := []string{"bind", "rw"}; !slices.Equal(pipe.GetOptions(), want) {
+		t.Errorf("MPS pipe mount options = %v, want %v", pipe.GetOptions(), want)
+	}
+	if len(adj.GetMounts()) != 2 {
+		t.Errorf("expected exactly the MPS pipe and shim mounts, got %+v", adj.GetMounts())
+	}
+}
+
+// TestNVMLShimMountSourceAgreesWithTheStagingPath closes the gap the
+// daemonpaths package exists for. fractiond stages the library to
+// daemonpaths.NVMLShimDir and the operator hostPath-mounts the same constant
+// into its pod; if the create hook ever bind-mounted a different directory, the
+// containers would map an empty path and the only symptom would be nvidia-smi
+// continuing to report the whole GPU — indistinguishable from the feature not
+// being deployed.
+func TestNVMLShimMountSourceAgreesWithTheStagingPath(t *testing.T) {
+	p := shimPlugin(t)
+	pod := &api.PodSandbox{Name: "test-pod", Annotations: map[string]string{limitAnnotation: "4Gi"}}
+
+	adj, _, err := p.CreateContainer(context.Background(), pod, &api.Container{Name: "trainer"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mount := mountTo(adj, injection.ContainerNVMLShimDir)
+	if mount == nil {
+		t.Fatalf("no shim mount; mounts = %+v", adj.GetMounts())
+	}
+	if mount.GetSource() != daemonpaths.NVMLShimDir {
+		t.Errorf("shim mount source = %q but fractiond stages to %q; containers would mount a directory with no library in it",
+			mount.GetSource(), daemonpaths.NVMLShimDir)
+	}
 }

@@ -57,6 +57,19 @@ type Config struct {
 	// FailOpen skips a container on parse error instead of blocking it.
 	FailOpen bool
 
+	// NVMLShimHostDir is the host directory holding the staged shadow
+	// libnvidia-ml.so.1 (daemonpaths.NVMLShimDir). When non-empty the create
+	// hook bind-mounts it read-only into every GPU-fractioning container and
+	// prepends the in-container path to LD_LIBRARY_PATH; empty disables the
+	// shim entirely.
+	//
+	// One field rather than a bool plus a path, because "the feature is on" and
+	// "there is a library on the host to point at" are the same condition:
+	// fractiond only fills this in once staging has actually succeeded, so a
+	// failed copy degrades to no mount instead of to a mount of a directory
+	// with nothing in it.
+	NVMLShimHostDir string
+
 	// SupportSMSharing is the cluster's installation-time sm-sharing chicken
 	// bit (Helm value -> operator -> --support-sm-sharing). When false, the
 	// gpu-compute.mode: sm-sharing annotation is rejected like any other
@@ -131,6 +144,7 @@ type Config struct {
 type Plugin struct {
 	AnnotationPrefix string
 	MPSPipeDirectory string
+	NVMLShimHostDir  string
 	FailOpen         bool
 	SupportSMSharing bool
 	Log              *slog.Logger
@@ -195,6 +209,7 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 	p := &Plugin{
 		AnnotationPrefix: cfg.AnnotationPrefix,
 		MPSPipeDirectory: cfg.MPSPipeDirectory,
+		NVMLShimHostDir:  cfg.NVMLShimHostDir,
 		FailOpen:         cfg.FailOpen,
 		SupportSMSharing: cfg.SupportSMSharing,
 		Log:              log,
@@ -344,7 +359,9 @@ func (p *Plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, ctr *ap
 // container it additionally injects NVIDIA_VISIBLE_DEVICES from the container's
 // device-assignment annotation when present, and routes the MPS pipe mount to
 // either the default or the shared MPS server based on the container's
-// compute-mode annotation (see injection.MPSPipeMount).
+// compute-mode annotation (see injection.MPSPipeMount). When a shim directory
+// is configured it also mounts the shadow NVML library and merges its path into
+// LD_LIBRARY_PATH (see attachNVMLShim).
 func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, error) {
 	gpuMemoryCfg, err := annotations.ParseGPUMemoryAnnotations(pod.Annotations, ctr.Name, p.AnnotationPrefix)
 	if err != nil {
@@ -441,6 +458,8 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		Options:     []string{"bind", "rw"},
 	})
 
+	p.attachNVMLShim(adj, ctr)
+
 	// Promote the scheduler's GPU device assignment to NVIDIA_VISIBLE_DEVICES.
 	// A fractional container does not request the nvidia.com/gpu resource, so the
 	// NVIDIA device plugin never sets this env var; without it the container would
@@ -465,6 +484,7 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		"mpsActiveThreadPercent", computePercent,
 		"visibleDevices", visibleDevices,
 		"computeMode", computeMode,
+		"nvmlShimDir", p.NVMLShimHostDir,
 	)
 
 	return adj, nil
@@ -502,13 +522,79 @@ func setEnforcedEnv(adj *api.ContainerAdjustment, ctr *api.Container, key, value
 // environment variable (as "KEY=VALUE" or a bare "KEY"), so the caller can
 // replace it rather than append a duplicate.
 func containerHasEnv(ctr *api.Container, key string) bool {
+	_, declared := containerEnv(ctr, key)
+	return declared
+}
+
+// containerEnv returns the value the container's spec declares for key, and
+// whether it declares it at all. A bare "KEY" with no '=' is a declaration with
+// an empty value, which is how the OCI spec expresses an exported-but-unset
+// variable. The last declaration wins, matching the loader's own resolution of
+// a duplicated key.
+func containerEnv(ctr *api.Container, key string) (value string, declared bool) {
 	prefix := key + "="
 	for _, kv := range ctr.GetEnv() {
-		if kv == key || strings.HasPrefix(kv, prefix) {
-			return true
+		switch {
+		case kv == key:
+			value, declared = "", true
+		case strings.HasPrefix(kv, prefix):
+			value, declared = strings.TrimPrefix(kv, prefix), true
 		}
 	}
-	return false
+	return value, declared
+}
+
+// attachNVMLShim mounts the staged shadow NVML library into the container and
+// puts it ahead of the driver's own copy on the loader search path. It is a
+// no-op when no host directory is configured, which is also what a failed
+// staging at startup leaves behind.
+//
+// Only the reporting view depends on this. The caps themselves are enforced by
+// MPS and the container toolkit whether or not the shim is present, so nothing
+// here is allowed to affect whether the rest of the adjustment is produced.
+func (p *Plugin) attachNVMLShim(adj *api.ContainerAdjustment, ctr *api.Container) {
+	if p.NVMLShimHostDir == "" {
+		return
+	}
+
+	// Read-only: the container has no business writing to a library the whole
+	// node shares, and fractiond replaces it by rename rather than in place, so
+	// nothing needs write access through this mount.
+	adj.AddMount(&api.Mount{
+		Source:      p.NVMLShimHostDir,
+		Destination: injection.ContainerNVMLShimDir,
+		Type:        "bind",
+		Options:     []string{"bind", "ro"},
+	})
+
+	prependEnvPath(adj, ctr, injection.EnvLDLibraryPath, injection.ContainerNVMLShimDir)
+}
+
+// prependEnvPath records "put dir at the front of this colon-separated list,
+// keeping whatever is already there" on the adjustment.
+//
+// This is the merging counterpart to setEnforcedEnv, and the difference is the
+// point. setEnforcedEnv overwrites, which is right for a cap a workload must
+// not be able to escape. LD_LIBRARY_PATH is not a cap: a GPU container arrives
+// with the NVIDIA container runtime's own driver directories already in it, and
+// a workload may add more, so overwriting would break library resolution inside
+// every GPU container on the node.
+//
+// The removal-before-add ordering is shared with setEnforcedEnv for the same
+// reason described there — runtime-tools/generate.AdjustEnv is last-entry-wins
+// per key, so the reversed pair would delete the variable rather than rewrite
+// it. Nothing is emitted at all when the merge is a no-op, which keeps a
+// re-created container from accumulating a longer path each time.
+func prependEnvPath(adj *api.ContainerAdjustment, ctr *api.Container, key, dir string) {
+	existing, declared := containerEnv(ctr, key)
+	merged, changed := injection.PrependLibraryPath(existing, dir)
+	if !changed {
+		return
+	}
+	if declared {
+		adj.RemoveEnv(key)
+	}
+	adj.AddEnv(key, merged)
 }
 
 // StopContainer drains the container's MPS clients before the runtime stops it.
