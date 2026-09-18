@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/mpsns"
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/procfs"
 )
 
@@ -57,6 +58,24 @@ const (
 	// finishes, and cutting it short would kill the client mid-kernel — the very
 	// thing being avoided. Exceeding it is treated as a wedged server.
 	DefaultClientDrainTimeout = 30 * time.Second
+
+	// DefaultClientListTimeout bounds the FIRST attempt at `client list`, and
+	// is deliberately a fraction of the drain timeout.
+	//
+	// Listing is a query that answers immediately; draining is a call that
+	// blocks while real GPU work finishes. Giving the list the drain budget —
+	// which is what happened before — meant a slow list could consume the
+	// caller's entire window before a single terminate was issued, so the NRI
+	// StopContainer hook returned having done nothing and the container was
+	// killed mid-kernel: the exact failure this endpoint exists to prevent,
+	// caused by the endpoint. The caller's whole budget is around a second (see
+	// mpsdrain.DefaultCallTimeout), so the list has to fit several times over
+	// inside it for the terminate to land while anyone is still listening.
+	//
+	// Exceeding it is not fatal: the drain runs on its own context and retries
+	// the list with the full drain budget, so a genuinely slow control daemon
+	// still gets drained, just after the caller has walked away.
+	DefaultClientListTimeout = 250 * time.Millisecond
 
 	// socketPerm keeps the endpoint root-only. Both daemons run as root, and
 	// anything else reaching it could terminate other tenants' GPU work.
@@ -85,6 +104,18 @@ type Restarter interface {
 	Restart(reason string, graceful bool) error
 }
 
+// Namespaces provisions and releases the per-container MPS namespaces that
+// carry each fractional container's compute cap. *mpsns.Manager implements it.
+//
+// It is served from this same socket rather than a second one: fractiond
+// already dials this endpoint, the operator already mounts it into both pods,
+// and every additional path between the two daemons is another mount whose
+// mismatch is silent.
+type Namespaces interface {
+	Provision(ctx context.Context, req mpsns.Request) (mpsns.Lease, error)
+	Release(ctx context.Context, containerID string) (bool, error)
+}
+
 // PIDLookup returns the host PIDs belonging to a container.
 type PIDLookup func(procRoot, containerID string) ([]int, error)
 
@@ -99,8 +130,16 @@ type Options struct {
 	Restarter Restarter
 	// ProcRoot is the procfs mount used to map a container to its PIDs.
 	ProcRoot string
+	// Namespaces provisions/releases per-container MPS namespaces. Optional:
+	// without one, those endpoints report that namespace isolation is not
+	// configured and fractiond refuses to create sm-sharing containers rather
+	// than creating uncapped ones.
+	Namespaces Namespaces
 	// ClientDrainTimeout bounds one client's drain. Zero uses the default.
 	ClientDrainTimeout time.Duration
+	// ClientListTimeout bounds the first `client list` attempt. Zero uses
+	// DefaultClientListTimeout.
+	ClientListTimeout time.Duration
 	// RecycleWhenIdle restarts MPS once a drain leaves no clients attached.
 	RecycleWhenIdle bool
 	// LookupPIDs overrides container→PID resolution (tests).
@@ -114,8 +153,10 @@ type Server struct {
 	socketPath         string
 	control            MPSControl
 	restarter          Restarter
+	namespaces         Namespaces
 	procRoot           string
 	clientDrainTimeout time.Duration
+	clientListTimeout  time.Duration
 	recycleWhenIdle    bool
 	lookupPIDs         PIDLookup
 	log                *slog.Logger
@@ -148,6 +189,14 @@ func New(opts Options) *Server {
 	if timeout <= 0 {
 		timeout = DefaultClientDrainTimeout
 	}
+	listTimeout := opts.ClientListTimeout
+	if listTimeout <= 0 {
+		listTimeout = DefaultClientListTimeout
+	}
+	// A list budget above the drain budget would make the "retry with the full
+	// budget" step a shortening rather than a lengthening, which is the one
+	// shape it must never take.
+	listTimeout = min(listTimeout, timeout)
 	lookup := opts.LookupPIDs
 	if lookup == nil {
 		lookup = procfs.PIDsInContainer
@@ -161,8 +210,10 @@ func New(opts Options) *Server {
 		socketPath:         socketPath,
 		control:            opts.Control,
 		restarter:          opts.Restarter,
+		namespaces:         opts.Namespaces,
 		procRoot:           procRoot,
 		clientDrainTimeout: timeout,
+		clientListTimeout:  listTimeout,
 		recycleWhenIdle:    opts.RecycleWhenIdle,
 		lookupPIDs:         lookup,
 		log:                log,
@@ -194,6 +245,8 @@ func (s *Server) Serve(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(Path, s.handle)
+	mux.HandleFunc(mpsdrain.PathProvision, s.handleProvision)
+	mux.HandleFunc(mpsdrain.PathRelease, s.handleRelease)
 	server := &http.Server{
 		Handler: mux,
 		// The handler's own work is bounded by the per-client drain timeout, so
@@ -222,10 +275,12 @@ func (s *Server) Serve(ctx context.Context) error {
 		}
 	}()
 
-	s.log.Info("serving MPS drain endpoint",
+	s.log.Info("serving mpsd endpoints",
 		"socket", s.socketPath,
 		"clientDrainTimeout", s.clientDrainTimeout,
+		"clientListTimeout", s.clientListTimeout,
 		"recycleWhenIdle", s.recycleWhenIdle,
+		"namespaceIsolation", s.namespaces != nil,
 	)
 
 	defer func() {
@@ -266,6 +321,107 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		s.log.Warn("failed to write drain response", "error", err)
+	}
+}
+
+// handleProvision serves PathProvision.
+//
+// Unlike the drain endpoint, a failure here is reported as an HTTP error rather
+// than as a successful response describing a failure. The distinction matters
+// at the caller: a drain that fails must never block a container from stopping,
+// whereas a namespace that could not be provisioned must block a container from
+// STARTING. Creating it anyway would put an uncapped tenant on a shared GPU,
+// which is precisely the thing the namespace exists to prevent.
+func (s *Server) handleProvision(w http.ResponseWriter, r *http.Request) {
+	var req mpsdrain.ProvisionRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	if req.ContainerID == "" {
+		http.Error(w, "containerId is required", http.StatusBadRequest)
+		return
+	}
+	if s.namespaces == nil {
+		// 501 rather than 500: the caller can tell "mpsd does not do this" from
+		// "mpsd tried and failed", and the first one is a deployment mismatch
+		// worth naming in fractiond's own log.
+		http.Error(w, "MPS namespace isolation is not configured on this node", http.StatusNotImplemented)
+		return
+	}
+
+	lease, err := s.namespaces.Provision(r.Context(), mpsns.Request{
+		ContainerID:         req.ContainerID,
+		ActiveThreadPercent: req.ActiveThreadPercent,
+		GPUUUIDs:            req.GPUUUIDs,
+		Pod:                 req.Pod,
+		Namespace:           req.Namespace,
+	})
+	if err != nil {
+		s.log.Error("failed to provision an MPS namespace; the container will not be created",
+			"containerId", req.ContainerID, "pod", req.Pod, "error", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, s.log, mpsdrain.ProvisionResponse{
+		PipeDirectory:       lease.PipeDirectory,
+		Namespace:           lease.Namespace,
+		Server:              lease.Server,
+		ActiveThreadPercent: lease.ActiveThreadPercent,
+	})
+}
+
+// handleRelease serves PathRelease. A release for a container that holds no
+// namespace, or on a node with no namespace manager, is a success with nothing
+// to report: the caller runs on a teardown path and must not be given errors it
+// can do nothing about.
+func (s *Server) handleRelease(w http.ResponseWriter, r *http.Request) {
+	var req mpsdrain.ReleaseRequest
+	if !decodeRequest(w, r, &req) {
+		return
+	}
+	if req.ContainerID == "" {
+		http.Error(w, "containerId is required", http.StatusBadRequest)
+		return
+	}
+	if s.namespaces == nil {
+		writeJSON(w, s.log, mpsdrain.ReleaseResponse{Message: "MPS namespace isolation is not configured on this node"})
+		return
+	}
+
+	deleted, err := s.namespaces.Release(r.Context(), req.ContainerID)
+	if err != nil {
+		s.log.Warn("failed to release an MPS namespace; it will be reclaimed by reconciliation",
+			"containerId", req.ContainerID, "error", err)
+		writeJSON(w, s.log, mpsdrain.ReleaseResponse{Message: err.Error()})
+		return
+	}
+
+	resp := mpsdrain.ReleaseResponse{Deleted: deleted}
+	if !deleted {
+		resp.Message = "the MPS namespace is still in use; its deletion will be retried"
+	}
+	writeJSON(w, s.log, resp)
+}
+
+// decodeRequest enforces POST and decodes the JSON body, reporting failures to
+// the caller. It returns false when a response has already been written.
+func decodeRequest(w http.ResponseWriter, r *http.Request, into any) bool {
+	if r.Method != http.MethodPost {
+		http.Error(w, "only POST is supported", http.StatusMethodNotAllowed)
+		return false
+	}
+	if err := json.NewDecoder(r.Body).Decode(into); err != nil {
+		http.Error(w, fmt.Sprintf("decoding request: %v", err), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, log *slog.Logger, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Warn("failed to write response", "error", err)
 	}
 }
 
@@ -369,8 +525,29 @@ func (s *Server) waitForDrains(timeout time.Duration) {
 // sharing one budget: a container can hold several MPS clients and each is
 // entitled to the full drain window, so a shared budget would cut the second
 // client short and report a wedge that is not there.
+//
+// The order of the first two steps is load-bearing. Resolving the container's
+// PIDs is a local /proc scan that cannot block on the control daemon, and it
+// can end the drain on its own — a container that never started a process has
+// nothing to drain. Doing it first means the control daemon is only consulted
+// when there is something to consult it about, which leaves the caller's budget
+// (an NRI StopContainer hook, around a second) for the part that protects the
+// GPU: issuing the terminate.
 func (s *Server) runDrain(ctx context.Context, req Request) Response {
 	log := s.log.With("containerId", req.ContainerID, "pod", req.Pod, "namespace", req.Namespace)
+
+	containerPIDs, err := s.lookupPIDs(s.procRoot, req.ContainerID)
+	if err != nil {
+		log.Warn("cannot resolve container PIDs; stopping container without draining", "error", err)
+		return Response{Message: fmt.Sprintf("resolving container PIDs: %v", err)}
+	}
+	if len(containerPIDs) == 0 {
+		// Normal for a container that never ran, and for one that is already
+		// gone. Either way there is no client of ours to drain, and asking the
+		// control daemon could only spend budget to learn that.
+		log.Debug("container has no processes; nothing to drain")
+		return Response{}
+	}
 
 	attached, err := s.listClients(ctx)
 	if err != nil {
@@ -380,12 +557,6 @@ func (s *Server) runDrain(ctx context.Context, req Request) Response {
 	if len(attached) == 0 {
 		log.Debug("no MPS clients attached; nothing to drain")
 		return Response{}
-	}
-
-	containerPIDs, err := s.lookupPIDs(s.procRoot, req.ContainerID)
-	if err != nil {
-		log.Warn("cannot resolve container PIDs; stopping container without draining", "error", err)
-		return Response{Message: fmt.Sprintf("resolving container PIDs: %v", err)}
 	}
 
 	targets := intersect(attached, containerPIDs)
@@ -434,10 +605,43 @@ func (s *Server) runDrain(ctx context.Context, req Request) Response {
 	return response
 }
 
-// listClients lists the attached MPS clients under its own deadline, so a
-// control daemon that never answers cannot hold the drain goroutine open.
+// listClients lists the attached MPS clients, under a short deadline first and
+// the full drain budget only if that expires.
+//
+// The two-attempt shape is what keeps a slow list from eating the whole hook.
+// `client list` is a query that answers immediately, so the common case costs
+// milliseconds and leaves the caller's ~1s budget free for the terminate that
+// actually stops the client submitting work. Handing the list the drain budget
+// instead — which is what it used to get — meant one slow list could burn every
+// bit of that budget before a terminate was even attempted, and the hook
+// returned having protected nothing.
+//
+// The retry exists because giving up entirely would be worse than being late: a
+// control daemon that is merely loaded would be read as "no clients", the
+// container would be killed with work in flight, and the GPU would be wedged
+// for its co-tenants. The drain goroutine outlives the caller by design, so the
+// second attempt still completes — the caller has simply stopped waiting for
+// it, and kubelet's termination grace period has not.
 func (s *Server) listClients(ctx context.Context) ([]int, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.clientDrainTimeout)
+	pids, err := s.listClientsWithin(ctx, s.clientListTimeout)
+	if err == nil || s.clientListTimeout >= s.clientDrainTimeout {
+		return pids, err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		// A real failure (no daemon, bad arguments) will fail the same way
+		// again; only slowness is worth waiting longer for.
+		return pids, err
+	}
+
+	s.log.Warn("listing MPS clients overran its budget; retrying with the full drain window",
+		"listTimeout", s.clientListTimeout, "drainTimeout", s.clientDrainTimeout)
+	return s.listClientsWithin(ctx, s.clientDrainTimeout)
+}
+
+// listClientsWithin lists the attached MPS clients under its own deadline, so a
+// control daemon that never answers cannot hold the drain goroutine open.
+func (s *Server) listClientsWithin(ctx context.Context, timeout time.Duration) ([]int, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return s.control.ClientPIDs(ctx)
 }

@@ -34,6 +34,14 @@ const (
 
 	DefaultMPSControlPort = "3" // protocol version 3
 
+	// DefaultControlSocketTimeout bounds the wait for the control socket to
+	// appear before a PostStart callback is run. Generous, because the daemon
+	// enumerates every GPU on the node before it binds.
+	DefaultControlSocketTimeout = 60 * time.Second
+	// controlSocketPollInterval is how often the socket is looked for. There is
+	// no event to wait on: the daemon creates the file when it is ready.
+	controlSocketPollInterval = 100 * time.Millisecond
+
 	// mpsServerExecutable is the executable name of the per-GPU MPS servers the
 	// control daemon spawns. A hard restart kills them explicitly: they are what
 	// holds the GPU state, and one that outlives its control daemon keeps
@@ -60,6 +68,26 @@ const (
 	// DefaultSharedServerName is the parameterless MPS server fractiond
 	// routes sm-sharing containers to (see configuration.SharedMPSSocketPath).
 	DefaultSharedServerName = "shared"
+	// DefaultNamespaceIsolation is the CLI flag default for per-container MPS
+	// namespaces. On, because without them the compute cap is only the
+	// CUDA_MPS_ACTIVE_THREAD_PERCENTAGE env var, which any process in the
+	// container can re-export before cuInit.
+	DefaultNamespaceIsolation = true
+	// DefaultNamespaceStatePath is where the per-container namespace leases are
+	// persisted.
+	//
+	// Under the MPS pipe directory because that is already a hostPath mounted
+	// into mpsd, so the file survives an mpsd container restart — which is the
+	// whole point — without the operator having to mount anything new. It is a
+	// dotfile so it cannot be mistaken for a server or namespace directory, and
+	// nothing outside mpsd reads it. Containers are only ever bind-mounted a
+	// leaf namespace directory, never this level, so it is not exposed to any
+	// workload.
+	//
+	// It deliberately does not survive a reboot: neither do the namespaces it
+	// describes.
+	DefaultNamespaceStatePath = "/run/nvidia-mps/.gpu-fractioning-namespaces.json"
+
 	// DefaultSupportSMSharing is the CLI flag default for the sm-sharing
 	// installation-time chicken bit (usually overridden by the operator via the
 	// SUPPORT_SM_SHARING env var, itself Helm-injected). When false, mpsd
@@ -90,6 +118,28 @@ type SupervisorConfig struct {
 	// KillProcess sends SIGKILL to a pid. Empty defaults to the real syscall;
 	// tests substitute a recorder.
 	KillProcess func(pid int) error
+
+	// PostStart runs once per daemon start, after the control socket appears,
+	// on a goroutine of its own. It exists because some state does not live in
+	// the daemon's config file and has to be pushed in over the control
+	// interface — the cap on the shared server's `default` namespace, and the
+	// per-container namespaces that have to be recreated after a restart, since
+	// a restart destroys every namespace while the containers using them keep
+	// running.
+	//
+	// "Per start", not "at startup": the supervisor restarts MPS to clear a
+	// wedge and (optionally) after the last client leaves, and either one would
+	// otherwise leave every running fractional container pointing at a
+	// namespace directory that no longer exists.
+	//
+	// Its context is cancelled when that run of the daemon ends, so a callback
+	// that talks to the control daemon stops when there is no longer one to
+	// talk to.
+	PostStart func(ctx context.Context)
+
+	// ControlSocketTimeout bounds the wait for the control socket before
+	// PostStart is called. Zero uses DefaultControlSocketTimeout.
+	ControlSocketTimeout time.Duration
 }
 
 // Supervisor manages the nvidia-cuda-mps-control process lifecycle.
@@ -280,14 +330,30 @@ func (s *Supervisor) removeStaleSocket() {
 }
 
 // buildMPSArgs builds the nvidia-cuda-mps-control argument list. The daemon is
-// always run in the foreground (-f) so we can supervise it. -m (multiuser, so
-// containers with differing UIDs can reach one MPS server) is required by the
-// shared server and therefore tracks the sm-sharing toggle: disabling the
-// feature must restore the pre-feature invocation, not just the pre-feature
-// config file. -p (control port) and -a (config file) are included only when
-// configured — a blank value acts as an escape hatch to drop the flag without
-// rebuilding. Order mirrors the known-good production invocation:
-// `-p <port> -m -f -a <config>`.
+// always run in the foreground (-f) so we can supervise it. -p (control port)
+// and -a (config file) are included only when configured — a blank value acts
+// as an escape hatch to drop the flag without rebuilding. Order mirrors the
+// known-good production invocation: `-p <port> -m -f -a <config>`.
+//
+// -m (multiuser) is not a convenience flag, it is the security boundary the
+// per-container compute cap rests on, and it was measured as such:
+//
+//   - Without it, a server only accepts clients whose uid matches its owner.
+//     That forces every pod on the server to run as the owner, and a client
+//     running as the owner IS the owner as far as the control API is concerned
+//     — it can call `namespace set --active-thread-percentage=100` on itself
+//     and walk out of its cap.
+//   - With it, `server create --uid=<non-zero>` is refused outright, so every
+//     server is root-owned, and non-root clients attach and are capped
+//     normally. A non-owner uid attempting `namespace set` gets "Insufficient
+//     privileges for UID 60000. 'NAMESPACE SET' requires server owner." —
+//     verified with uids 60000 and 70000 attached concurrently to one
+//     root-owned server, each capped, neither able to mutate anything.
+//
+// It tracks the sm-sharing toggle because the shared server it protects is
+// created by the same toggle: with sm-sharing off there is no shared server, no
+// per-container namespace and nothing for multiuser mode to defend, and the
+// invocation reverts to exactly its pre-feature shape.
 func buildMPSArgs(controlPort, configPath string, multiuser bool) []string {
 	args := make([]string, 0, 5)
 	if controlPort != "" {
@@ -362,10 +428,76 @@ func (s *Supervisor) runMPS(ctx context.Context) error {
 		close(running.done)
 	}()
 
+	// Push the state that lives outside the config file into the freshly
+	// started daemon. Run on its own goroutine so a callback that is slow (or
+	// waiting on a socket that never appears) cannot delay supervising the
+	// process it is configuring, and bounded by this run so it stops when the
+	// daemon does.
+	s.runPostStart(ctx, running)
+
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("MPS daemon process: %w", err)
 	}
 	return nil
+}
+
+// runPostStart waits for the control socket and then runs the PostStart
+// callback, on a goroutine bounded by this run of the daemon.
+func (s *Supervisor) runPostStart(ctx context.Context, running *runningMPS) {
+	if s.cfg.PostStart == nil {
+		return
+	}
+
+	timeout := s.cfg.ControlSocketTimeout
+	if timeout <= 0 {
+		timeout = DefaultControlSocketTimeout
+	}
+	socket := filepath.Join(s.cfg.PipeDir, mpsControlSocket)
+
+	go func() {
+		// Cancelled when this run ends, so a callback mid-command against a
+		// daemon that has just died gives up instead of waiting out its own
+		// timeouts.
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go func() {
+			select {
+			case <-running.done:
+				cancel()
+			case <-runCtx.Done():
+			}
+		}()
+
+		if !waitForFile(runCtx, socket, timeout) {
+			s.logger.Warn("MPS control socket did not appear; skipping post-start configuration",
+				"socket", socket, "timeout", timeout)
+			return
+		}
+		s.cfg.PostStart(runCtx)
+	}()
+}
+
+// waitForFile polls for path until it exists, ctx is done, or timeout elapses.
+// Polling rather than watching: the file is created by another process on a
+// host path, and an inotify watch on a directory that may not exist yet is more
+// moving parts than a 100ms tick.
+func waitForFile(ctx context.Context, path string, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(controlSocketPollInterval)
+	defer ticker.Stop()
+
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline:
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // Restart stops the running MPS control daemon so the supervisor's own loop

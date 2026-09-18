@@ -15,10 +15,12 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mpsdrain"
+	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal/mpsns"
 )
 
 // serveOnSocket starts a Server on a socket in t.TempDir() and returns its
@@ -462,4 +464,213 @@ func assertGoroutinesSettle(t *testing.T, before int) {
 	buf := make([]byte, 1<<16)
 	buf = buf[:runtime.Stack(buf, true)]
 	t.Errorf("goroutines went from %d to %d and did not settle:\n%s", before, runtime.NumGoroutine(), buf)
+}
+
+// ── namespace provisioning over the same socket ─────────────────────────────
+
+// fakeNamespaces stands in for the namespace manager at the endpoint's seam.
+type fakeNamespaces struct {
+	mu sync.Mutex
+
+	lease        mpsns.Lease
+	provisionErr error
+	releaseErr   error
+	deleted      bool
+
+	provisioned []mpsns.Request
+	released    []string
+}
+
+func (f *fakeNamespaces) Provision(_ context.Context, req mpsns.Request) (mpsns.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.provisioned = append(f.provisioned, req)
+	if f.provisionErr != nil {
+		return mpsns.Lease{}, f.provisionErr
+	}
+	return f.lease, nil
+}
+
+func (f *fakeNamespaces) Release(_ context.Context, containerID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.released = append(f.released, containerID)
+	return f.deleted, f.releaseErr
+}
+
+func (f *fakeNamespaces) requests() []mpsns.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.provisioned)
+}
+
+func (f *fakeNamespaces) releases() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.released)
+}
+
+// TestProvisionEndToEndWithTheRealClient: the provision call travels the same
+// unix socket as the drain, and what comes back is the leaf namespace pipe
+// directory the container is bind-mounted. Deliberately end-to-end through the
+// real client, because the thing most likely to break silently is the wire
+// shape between two binaries in two images.
+func TestProvisionEndToEndWithTheRealClient(t *testing.T) {
+	namespaces := &fakeNamespaces{lease: mpsns.Lease{
+		ContainerID:         testContainerID,
+		Namespace:           "kai_3f5a1c9e7b2d4086_abc123",
+		Server:              "shared",
+		PipeDirectory:       "/run/nvidia-mps/shared/kai_3f5a1c9e7b2d4086_abc123",
+		ActiveThreadPercent: 25,
+	}}
+	socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}, Namespaces: namespaces})
+
+	client := mpsdrain.NewClient(socketPath, 5*time.Second, quietLogger())
+	resp, err := client.Provision(context.Background(), mpsdrain.ProvisionRequest{
+		ContainerID:         testContainerID,
+		ActiveThreadPercent: 25,
+		GPUUUIDs:            []string{"GPU-abc123"},
+		Pod:                 "trainer-0",
+		Namespace:           "team-a",
+	})
+	if err != nil {
+		t.Fatalf("Provision() error = %v", err)
+	}
+
+	if resp.PipeDirectory != namespaces.lease.PipeDirectory {
+		t.Errorf("PipeDirectory = %q, want %q", resp.PipeDirectory, namespaces.lease.PipeDirectory)
+	}
+	if resp.Namespace != namespaces.lease.Namespace || resp.Server != "shared" || resp.ActiveThreadPercent != 25 {
+		t.Errorf("response = %+v, want the lease's namespace, server and cap", resp)
+	}
+
+	got := namespaces.requests()
+	if len(got) != 1 {
+		t.Fatalf("provision requests = %d, want 1", len(got))
+	}
+	if got[0].ContainerID != testContainerID || got[0].ActiveThreadPercent != 25 {
+		t.Errorf("request = %+v, want the container id and cap intact", got[0])
+	}
+	if !slices.Equal(got[0].GPUUUIDs, []string{"GPU-abc123"}) {
+		t.Errorf("request GPU UUIDs = %v, want [GPU-abc123]", got[0].GPUUUIDs)
+	}
+}
+
+// TestProvisionFailureIsAnError, and must be: a container whose namespace could
+// not be provisioned has no enforceable compute cap, and the caller has to be
+// able to refuse to create it. A failure dressed up as a successful response
+// with an empty pipe directory would be a container created uncapped.
+func TestProvisionFailureIsAnError(t *testing.T) {
+	namespaces := &fakeNamespaces{provisionErr: errors.New("the control daemon refused")}
+	socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}, Namespaces: namespaces})
+
+	client := mpsdrain.NewClient(socketPath, 5*time.Second, quietLogger())
+	resp, err := client.Provision(context.Background(), mpsdrain.ProvisionRequest{
+		ContainerID: testContainerID, ActiveThreadPercent: 25,
+	})
+	if err == nil {
+		t.Fatalf("Provision() = %+v, nil; want the failure reported", resp)
+	}
+	if !strings.Contains(err.Error(), "the control daemon refused") {
+		t.Errorf("error %v does not carry the reason the caller has to log", err)
+	}
+	if resp.PipeDirectory != "" {
+		t.Errorf("PipeDirectory = %q alongside an error; a caller that ignored the error would mount it", resp.PipeDirectory)
+	}
+}
+
+// TestProvisionWithoutANamespaceManagerIsRefused: a node where namespace
+// isolation is off, or misconfigured, must say so rather than quietly hand back
+// nothing. fractiond turns this into a refusal to create the container, which
+// is the safe direction — the unsafe one is an sm-sharing container running
+// with no cap.
+func TestProvisionWithoutANamespaceManagerIsRefused(t *testing.T) {
+	socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}})
+
+	client := mpsdrain.NewClient(socketPath, 5*time.Second, quietLogger())
+	if _, err := client.Provision(context.Background(), mpsdrain.ProvisionRequest{
+		ContainerID: testContainerID, ActiveThreadPercent: 25,
+	}); err == nil {
+		t.Fatal("Provision() error = nil on a node with no namespace manager, want a refusal")
+	}
+}
+
+// TestReleaseEndToEndWithTheRealClient covers both outcomes of a release: the
+// namespace is gone, or it is not gone yet because a client is still attached.
+// The second is not an error — the caller is on a teardown path and mpsd
+// retries — so it has to arrive as a successful response that says so.
+func TestReleaseEndToEndWithTheRealClient(t *testing.T) {
+	for _, deleted := range []bool{true, false} {
+		namespaces := &fakeNamespaces{deleted: deleted}
+		socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}, Namespaces: namespaces})
+
+		client := mpsdrain.NewClient(socketPath, 5*time.Second, quietLogger())
+		resp, err := client.Release(context.Background(), mpsdrain.ReleaseRequest{ContainerID: testContainerID})
+		if err != nil {
+			t.Fatalf("Release() error = %v", err)
+		}
+		if resp.Deleted != deleted {
+			t.Errorf("Deleted = %v, want %v", resp.Deleted, deleted)
+		}
+		if !deleted && resp.Message == "" {
+			t.Error("a release that did not delete said nothing about why")
+		}
+		if got := namespaces.releases(); !slices.Equal(got, []string{testContainerID}) {
+			t.Errorf("released = %v, want [%s]", got, testContainerID)
+		}
+	}
+}
+
+// TestReleaseWithoutANamespaceManagerIsNotAnError: fractiond releases from
+// RemoveContainer unconditionally. On a node with isolation off that must be a
+// no-op, not an error logged on every container removal.
+func TestReleaseWithoutANamespaceManagerIsNotAnError(t *testing.T) {
+	socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}})
+
+	client := mpsdrain.NewClient(socketPath, 5*time.Second, quietLogger())
+	resp, err := client.Release(context.Background(), mpsdrain.ReleaseRequest{ContainerID: testContainerID})
+	if err != nil {
+		t.Fatalf("Release() error = %v, want a quiet no-op", err)
+	}
+	if resp.Deleted {
+		t.Error("Deleted = true on a node with no namespace manager")
+	}
+}
+
+// TestNamespaceEndpointsRejectMalformedRequests: both endpoints are reachable
+// only over a root-only unix socket, but a missing container id would otherwise
+// be answered with a namespace derived from an empty string — the same name for
+// every such request.
+func TestNamespaceEndpointsRejectMalformedRequests(t *testing.T) {
+	socketPath, _ := serveOnSocket(t, Options{Control: &fakeControl{}, Namespaces: &fakeNamespaces{}})
+	client := rawClient(t, socketPath)
+
+	for _, path := range []string{mpsdrain.PathProvision, mpsdrain.PathRelease} {
+		resp, err := client.Post("http://mpsd"+path, "application/json", strings.NewReader(`{"activeThreadPercent":50}`))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("POST %s with no container id = %s, want 400", path, resp.Status)
+		}
+
+		resp, err = client.Post("http://mpsd"+path, "application/json", strings.NewReader("{not json"))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("POST %s with a malformed body = %s, want 400", path, resp.Status)
+		}
+
+		getResp, err := client.Get("http://mpsd" + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		_ = getResp.Body.Close()
+		if getResp.StatusCode != http.StatusMethodNotAllowed {
+			t.Errorf("GET %s = %s, want 405", path, getResp.Status)
+		}
+	}
 }

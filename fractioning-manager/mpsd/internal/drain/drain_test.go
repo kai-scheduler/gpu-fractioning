@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -38,6 +39,10 @@ type fakeControl struct {
 	terminateFunc func(ctx context.Context, pid int) error
 	terminated    []int
 	timeouts      []time.Duration
+
+	// clientPIDsFunc overrides listResults entirely, for tests about the
+	// deadline a list is given rather than the answer it returns.
+	clientPIDsFunc func(ctx context.Context) ([]int, error)
 }
 
 type listResult struct {
@@ -47,8 +52,18 @@ type listResult struct {
 
 func (f *fakeControl) ClientPIDs(ctx context.Context) ([]int, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.listCalls++
+	listFunc := f.clientPIDsFunc
+	f.mu.Unlock()
+	if listFunc != nil {
+		// Called without the lock: these implementations block until their
+		// context expires, and holding the mutex would deadlock every other
+		// accessor for the duration.
+		return listFunc(ctx)
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if len(f.listResults) == 0 {
 		return nil, nil
 	}
@@ -814,4 +829,152 @@ func TestDrainWithoutAControlClientDoesNotPanic(t *testing.T) {
 		t.Errorf("inFlight = %d, want 0: no background drain should have been started", inFlight)
 	}
 	s.waitForDrains(time.Second)
+}
+
+// ── budgeting the client list (the hook's terminate has to actually happen) ──
+
+// TestContainerPIDsAreResolvedBeforeTheControlDaemonIsAsked.
+//
+// The drain runs inside an NRI StopContainer hook with a budget of around a
+// second. Resolving the container's PIDs is a local /proc scan that cannot
+// block on MPS and can end the drain on its own, so doing it first means the
+// control daemon is only consulted when there is something to consult it about.
+// With the order reversed, a container that never touched the GPU — a sidecar,
+// an init container, most containers on most nodes — spent the hook's whole
+// budget on a `client list` whose answer could not matter.
+func TestContainerPIDsAreResolvedBeforeTheControlDaemonIsAsked(t *testing.T) {
+	control := &fakeControl{listResults: []listResult{{pids: []int{100, 200}}}}
+	s := New(Options{
+		Control:            control,
+		LookupPIDs:         staticLookup(nil, nil),
+		ClientDrainTimeout: time.Second,
+		Log:                quietLogger(),
+	})
+
+	resp := s.Drain(context.Background(), Request{ContainerID: testContainerID})
+
+	if len(resp.Drained) != 0 {
+		t.Errorf("drained %v, want nothing for a container with no processes", resp.Drained)
+	}
+	if got := control.listCount(); got != 0 {
+		t.Errorf("ClientPIDs called %d times for a container with no processes, want 0", got)
+	}
+}
+
+// TestASlowClientListStillLeadsToATerminate is the defect this budgeting
+// exists for.
+//
+// `client list` used to get the full drain budget (30s by default) while the
+// caller's hook has about a second. One slow list therefore consumed the entire
+// hook window before a single terminate was issued: the hook returned having
+// protected nothing, and the container was killed with GPU work in flight —
+// the orphaned-client wedge this endpoint exists to prevent, caused by the
+// endpoint.
+//
+// Now the first attempt is bounded by the much shorter list budget, and only
+// the retry gets the drain budget. The terminate still happens, because the
+// drain goroutine outlives the caller by design.
+func TestASlowClientListStillLeadsToATerminate(t *testing.T) {
+	const listTimeout = 20 * time.Millisecond
+
+	var attempts atomic.Int32
+	control := &fakeControl{}
+	control.clientPIDsFunc = func(ctx context.Context) ([]int, error) {
+		// The first attempt never answers; the retry does. A control daemon
+		// that is loaded rather than broken behaves like this.
+		if attempts.Add(1) == 1 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return []int{100}, nil
+	}
+
+	s := New(Options{
+		Control:            control,
+		LookupPIDs:         staticLookup([]int{100}, nil),
+		ClientDrainTimeout: 5 * time.Second,
+		ClientListTimeout:  listTimeout,
+		Log:                quietLogger(),
+	})
+
+	start := time.Now()
+	resp := s.Drain(context.Background(), Request{ContainerID: testContainerID})
+	elapsed := time.Since(start)
+
+	if !slices.Equal(resp.Drained, []int{100}) {
+		t.Fatalf("drained %v, want [100]: a slow list must not mean no terminate", resp.Drained)
+	}
+	if !slices.Equal(control.terminatedPIDs(), []int{100}) {
+		t.Errorf("terminated %v, want [100]", control.terminatedPIDs())
+	}
+	// The first attempt must have been cut off near the list budget rather than
+	// running to the drain budget, which is what leaves room for the terminate.
+	if elapsed > time.Second {
+		t.Errorf("the drain took %v; the first list was not bounded by the %v list budget", elapsed, listTimeout)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Errorf("ClientPIDs attempted %d times, want 2 (a short one, then the retry)", got)
+	}
+}
+
+// TestTheFirstClientListGetsTheShortBudget pins the deadline the control
+// daemon actually sees. A list handed the drain budget is the defect above; a
+// list handed no deadline at all is worse.
+func TestTheFirstClientListGetsTheShortBudget(t *testing.T) {
+	control := &fakeControl{}
+	var firstDeadline time.Duration
+	control.clientPIDsFunc = func(ctx context.Context) ([]int, error) {
+		if deadline, ok := ctx.Deadline(); ok {
+			firstDeadline = time.Until(deadline)
+		}
+		return nil, nil
+	}
+
+	s := New(Options{
+		Control:            control,
+		LookupPIDs:         staticLookup([]int{100}, nil),
+		ClientDrainTimeout: 30 * time.Second,
+		ClientListTimeout:  250 * time.Millisecond,
+		Log:                quietLogger(),
+	})
+	s.Drain(context.Background(), Request{ContainerID: testContainerID})
+
+	if firstDeadline <= 0 {
+		t.Fatal("the first client list carried no deadline")
+	}
+	if firstDeadline > 250*time.Millisecond {
+		t.Errorf("the first client list got %v, want at most the 250ms list budget", firstDeadline)
+	}
+}
+
+// TestAFailedClientListIsNotRetried: only slowness is worth waiting longer for.
+// A control daemon that is not listening will not start listening within the
+// drain budget, and retrying would spend it finding that out again.
+func TestAFailedClientListIsNotRetried(t *testing.T) {
+	control := &fakeControl{listResults: []listResult{{err: errors.New("control daemon is not listening")}}}
+	s := New(Options{
+		Control:            control,
+		LookupPIDs:         staticLookup([]int{100}, nil),
+		ClientDrainTimeout: time.Second,
+		ClientListTimeout:  10 * time.Millisecond,
+		Log:                quietLogger(),
+	})
+
+	s.Drain(context.Background(), Request{ContainerID: testContainerID})
+
+	if got := control.listCount(); got != 1 {
+		t.Errorf("ClientPIDs called %d times for an outright failure, want 1", got)
+	}
+}
+
+// TestClientListBudgetIsNeverLongerThanTheDrainBudget: the retry has to be a
+// lengthening. A misconfiguration that inverted them would make the second
+// attempt shorter than the first, so a list that was merely slow would fail
+// twice and report a wedge that is not there.
+func TestClientListBudgetIsNeverLongerThanTheDrainBudget(t *testing.T) {
+	s := New(Options{Control: &fakeControl{}, ClientDrainTimeout: time.Second, ClientListTimeout: time.Minute})
+	if s.clientListTimeout > s.clientDrainTimeout {
+		t.Errorf("clientListTimeout = %v, clientDrainTimeout = %v; the retry would be shorter than the first attempt",
+			s.clientListTimeout, s.clientDrainTimeout)
+	}
 }

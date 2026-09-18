@@ -1050,3 +1050,176 @@ func watchdogGoroutines() int {
 		buf = make([]byte, 2*len(buf))
 	}
 }
+
+// TestSupervisor_PostStartRunsOncePerDaemonStart.
+//
+// Some of MPS's state does not live in its config file and has to be pushed in
+// over the control interface after the daemon comes up: the cap on the shared
+// server's `default` namespace, and the per-container namespaces, which a
+// restart destroys while the containers using them keep running. Running the
+// hook only at process startup would leave every one of those containers
+// pointed at a namespace directory that no longer exists after the first
+// recycle — and mpsd recycles after every drained workload.
+func TestSupervisor_PostStartRunsOncePerDaemonStart(t *testing.T) {
+	pipeDir := filepath.Join(t.TempDir(), "pipe")
+	script := filepath.Join(t.TempDir(), "fake-mps")
+	// Create the control socket's stand-in, stay up briefly (as a daemon that
+	// has finished initialising does), then exit: each run is one start.
+	body := "#!/bin/sh\nmkdir -p " + pipeDir + "\ntouch " + pipeDir + "/control\nsleep 0.3\nexit 1\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	starts := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s := NewSupervisor(SupervisorConfig{
+		MPSBinary:       script,
+		PipeDir:         pipeDir,
+		LogDir:          filepath.Join(t.TempDir(), "log"),
+		Backoff:         10 * time.Millisecond,
+		MaxRetries:      3,
+		StableThreshold: time.Hour,
+		Stdout:          io.Discard,
+		Stderr:          io.Discard,
+		PostStart: func(context.Context) {
+			mu.Lock()
+			defer mu.Unlock()
+			starts++
+		},
+	}, testLogger())
+
+	_ = s.Run(ctx)
+
+	// The hook runs on a goroutine of its own, so give the last one a moment to
+	// land after Run returns.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := starts
+		mu.Unlock()
+		if got >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 3 {
+		t.Errorf("PostStart ran %d times across 3 daemon starts, want 3", starts)
+	}
+}
+
+// TestSupervisor_PostStartWaitsForTheControlSocket: every command the hook
+// issues goes through the control socket, so running it before the socket
+// exists would fail all of them — and the hook is what restores the namespaces
+// running containers depend on.
+func TestSupervisor_PostStartWaitsForTheControlSocket(t *testing.T) {
+	pipeDir := filepath.Join(t.TempDir(), "pipe")
+	script := filepath.Join(t.TempDir(), "fake-mps")
+	// The socket appears only after a delay, as it does on a real node while
+	// the daemon enumerates the GPUs.
+	body := "#!/bin/sh\nsleep 0.3\nmkdir -p " + pipeDir + "\ntouch " + pipeDir + "/control\nsleep 5\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	socketSeen := make(chan bool, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	s := NewSupervisor(SupervisorConfig{
+		MPSBinary:            script,
+		PipeDir:              pipeDir,
+		LogDir:               filepath.Join(t.TempDir(), "log"),
+		Backoff:              10 * time.Millisecond,
+		MaxRetries:           1,
+		StableThreshold:      time.Hour,
+		Stdout:               io.Discard,
+		Stderr:               io.Discard,
+		ControlSocketTimeout: 5 * time.Second,
+		PostStart: func(context.Context) {
+			_, err := os.Stat(filepath.Join(pipeDir, "control"))
+			select {
+			case socketSeen <- err == nil:
+			default:
+			}
+		},
+	}, testLogger())
+
+	go func() { _ = s.Run(ctx) }()
+
+	select {
+	case present := <-socketSeen:
+		if !present {
+			t.Error("PostStart ran before the control socket existed; every control command it issues would fail")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("PostStart never ran")
+	}
+	cancel()
+}
+
+// TestSupervisor_PostStartGivesUpWhenTheSocketNeverAppears: a daemon that fails
+// to initialise must not leave a hook waiting forever, and must not have the
+// hook run anyway against a socket that is not there.
+func TestSupervisor_PostStartGivesUpWhenTheSocketNeverAppears(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fake-mps")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nsleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ran := make(chan struct{}, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	s := NewSupervisor(SupervisorConfig{
+		MPSBinary:            script,
+		PipeDir:              filepath.Join(t.TempDir(), "pipe"),
+		LogDir:               filepath.Join(t.TempDir(), "log"),
+		Backoff:              10 * time.Millisecond,
+		MaxRetries:           1,
+		StableThreshold:      time.Hour,
+		Stdout:               io.Discard,
+		Stderr:               io.Discard,
+		ControlSocketTimeout: 100 * time.Millisecond,
+		PostStart:            func(context.Context) { ran <- struct{}{} },
+	}, testLogger())
+
+	go func() { _ = s.Run(ctx) }()
+
+	select {
+	case <-ran:
+		t.Error("PostStart ran even though the control socket never appeared")
+	case <-time.After(time.Second):
+	}
+	cancel()
+}
+
+// TestSupervisor_NoPostStartHookIsFine: the hook is optional, and a nil one
+// must not be called.
+func TestSupervisor_NoPostStartHookIsFine(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fake-mps")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	s := NewSupervisor(SupervisorConfig{
+		MPSBinary: script,
+		PipeDir:   filepath.Join(t.TempDir(), "pipe"),
+		LogDir:    filepath.Join(t.TempDir(), "log"),
+		Backoff:   50 * time.Millisecond,
+		Stdout:    io.Discard,
+		Stderr:    io.Discard,
+	}, testLogger())
+
+	if err := s.Run(ctx); err != nil {
+		t.Errorf("Run() error = %v", err)
+	}
+}
