@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package mpsctl drives the nvidia-cuda-mps-control CLI: listing the MPS
-// clients currently attached to the node's servers, and terminating one so it
-// drains instead of dying mid-kernel.
+// clients currently attached to the node's servers, terminating one so it
+// drains instead of dying mid-kernel, and administering the per-container MPS
+// namespaces that carry each fractional container's compute cap.
 //
 // It shells out rather than speaking the control daemon's socket protocol
 // directly. That protocol is not a published interface, whereas the CLI is the
@@ -17,6 +18,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +137,196 @@ func (c *Control) TerminateClient(ctx context.Context, pid int, timeout time.Dur
 		return fmt.Errorf("terminating MPS client %d: %w", pid, err)
 	}
 	return nil
+}
+
+// ── MPS namespaces ──────────────────────────────────────────────────────────
+//
+// A namespace is the unit the control daemon enforces a compute cap on. Per
+// namespace, `--active-thread-percentage` is an authoritative ceiling: a client
+// in that namespace that exports CUDA_MPS_ACTIVE_THREAD_PERCENTAGE can only
+// lower its own share, never raise it past the namespace's. That is the entire
+// reason this file grew a namespace API — the env var alone is advisory, and
+// any process in a container can re-export it before cuInit.
+//
+// The verbs below mirror `<module> <verb> --help` on the protocol-3 control
+// daemon (driver 615). Their exact argument shapes are recorded in one place
+// each, so a correction is a one-line change rather than a hunt.
+
+const (
+	// namespaceModule is the control-daemon module that owns namespaces.
+	namespaceModule = "namespace"
+
+	// pipeDirectoryField is the `namespace get` field holding the directory the
+	// namespace's control socket lives in — the directory a container must be
+	// handed as CUDA_MPS_PIPE_DIRECTORY to be inside the namespace (and thus
+	// under its cap).
+	//
+	// It is READ rather than derived. The layout happens to be
+	// <pipeDir>/<server>/<namespace> today, but a container handed a path that
+	// is wrong in a way the daemon tolerates — the server directory instead of
+	// the namespace directory, say — silently lands in the uncapped `default`
+	// namespace. A guess that is wrong fails loudly here; a guess that is
+	// wrong-but-plausible fails silently on the GPU.
+	pipeDirectoryField = "pipe_directory"
+)
+
+// namespaceNamePattern is the only shape the control daemon accepts for a
+// namespace name. It is enforced here, at the boundary, because a name outside
+// it is rejected by the daemon with a message that says nothing about which of
+// the caller's inputs produced it.
+var namespaceNamePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
+
+// ValidNamespaceName reports whether name is one the control daemon will
+// accept: lowercase letters, digits and underscores only. No uppercase and no
+// hyphens, which rules out most Kubernetes object names verbatim.
+func ValidNamespaceName(name string) bool { return namespaceNamePattern.MatchString(name) }
+
+// CreateNamespace creates a namespace on the given server.
+//
+// Creating a namespace that already exists is an error from the daemon, so
+// callers that must be idempotent should treat a create failure as inconclusive
+// and settle it with NamespacePipeDirectory, which answers the only question
+// that matters: is the namespace there and usable.
+func (c *Control) CreateNamespace(ctx context.Context, server, name string) error {
+	if err := checkNamespaceArgs(server, name); err != nil {
+		return err
+	}
+	if _, err := c.exec(ctx, c.timeout, namespaceModule, "create", name, "--server="+server); err != nil {
+		return fmt.Errorf("creating MPS namespace %q on server %q: %w", name, server, err)
+	}
+	return nil
+}
+
+// SetNamespaceActiveThreadPercentage sets the namespace's SM ceiling.
+//
+// It FAILS while the namespace has an active client, which is not a bug to work
+// around but the property the whole design rests on: a cap that could be
+// changed under a running client would be a cap the client's own lifecycle
+// could race. Every call therefore has to happen before the container's CUDA
+// process starts — which is why provisioning runs from fractiond's NRI
+// CreateContainer hook and not from anywhere later.
+func (c *Control) SetNamespaceActiveThreadPercentage(ctx context.Context, server, name string, percent int) error {
+	if err := checkNamespaceArgs(server, name); err != nil {
+		return err
+	}
+	if percent < 1 || percent > 100 {
+		return fmt.Errorf("active thread percentage %d for MPS namespace %q is out of range, expected 1..100", percent, name)
+	}
+	_, err := c.exec(ctx, c.timeout, namespaceModule, "set", name,
+		"--server="+server,
+		"--active-thread-percentage="+strconv.Itoa(percent))
+	if err != nil {
+		return fmt.Errorf("setting active thread percentage %d%% on MPS namespace %q (server %q): %w", percent, name, server, err)
+	}
+	return nil
+}
+
+// DeleteNamespace removes a namespace from the server. Like `namespace set`, it
+// fails while a client is still attached, so callers delete on container
+// teardown and retry rather than assuming a single attempt succeeds.
+func (c *Control) DeleteNamespace(ctx context.Context, server, name string) error {
+	if err := checkNamespaceArgs(server, name); err != nil {
+		return err
+	}
+	if _, err := c.exec(ctx, c.timeout, namespaceModule, "delete", name, "--server="+server); err != nil {
+		return fmt.Errorf("deleting MPS namespace %q on server %q: %w", name, server, err)
+	}
+	return nil
+}
+
+// NamespacePipeDirectory returns the directory holding the namespace's control
+// socket — the value a container gets as CUDA_MPS_PIPE_DIRECTORY, and the
+// single bind-mount source that puts it inside the namespace.
+//
+// It doubles as the existence check: a namespace that is not there has no pipe
+// directory to report, so an error here means "not usable", which is exactly
+// what an idempotent provision needs to know.
+func (c *Control) NamespacePipeDirectory(ctx context.Context, server, name string) (string, error) {
+	if err := checkNamespaceArgs(server, name); err != nil {
+		return "", err
+	}
+	out, err := c.exec(ctx, c.timeout, namespaceModule, "get", name, server, pipeDirectoryField)
+	if err != nil {
+		return "", fmt.Errorf("reading %s of MPS namespace %q on server %q: %w", pipeDirectoryField, name, server, err)
+	}
+	dir := parseAbsolutePath(out)
+	if dir == "" {
+		return "", fmt.Errorf("reading %s of MPS namespace %q on server %q: no absolute path in %q",
+			pipeDirectoryField, name, server, bytes.TrimSpace(out))
+	}
+	return dir, nil
+}
+
+// NamespaceNames lists the namespaces the server currently has.
+//
+// The parse is deliberately permissive — it collects every token on every line
+// that is a syntactically valid namespace name — because the output format is
+// not a published interface and a banner, a prompt or a header column must not
+// be able to hide a real namespace. Permissiveness is safe here only because of
+// how the caller uses the result: reconciliation acts on names carrying its own
+// generated prefix and ignores everything else, so a stray token picked up from
+// a header can never become a namespace somebody's container is using and we
+// delete.
+func (c *Control) NamespaceNames(ctx context.Context, server string) ([]string, error) {
+	if server == "" {
+		return nil, fmt.Errorf("listing MPS namespaces: server name is empty")
+	}
+	out, err := c.exec(ctx, c.timeout, namespaceModule, "list", "--server="+server)
+	if err != nil {
+		return nil, fmt.Errorf("listing MPS namespaces on server %q: %w", server, err)
+	}
+	return parseNamespaceNames(out), nil
+}
+
+// checkNamespaceArgs rejects the inputs the daemon would reject, with an error
+// that names which one was wrong.
+func checkNamespaceArgs(server, name string) error {
+	if server == "" {
+		return fmt.Errorf("MPS namespace operation needs a server name")
+	}
+	if !ValidNamespaceName(name) {
+		return fmt.Errorf("invalid MPS namespace name %q: only lowercase letters, digits and underscores are accepted", name)
+	}
+	return nil
+}
+
+// parseAbsolutePath pulls the first absolute path out of command output,
+// tolerating the shapes the CLI might print it in ("value", "key: value",
+// "key=value"). Anything that is not an absolute path is not a pipe directory,
+// and returning "" rather than a best guess keeps a misread out of a container's
+// CUDA_MPS_PIPE_DIRECTORY.
+func parseAbsolutePath(out []byte) string {
+	for line := range strings.SplitSeq(string(out), "\n") {
+		for field := range strings.FieldsSeq(strings.ReplaceAll(strings.ReplaceAll(line, "=", " "), ",", " ")) {
+			field = strings.Trim(field, `"'`)
+			if strings.HasPrefix(field, "/") {
+				return filepath.Clean(field)
+			}
+		}
+	}
+	return ""
+}
+
+// parseNamespaceNames collects every valid namespace name in the output,
+// preserving order and dropping duplicates.
+func parseNamespaceNames(out []byte) []string {
+	var names []string
+	seen := map[string]struct{}{}
+
+	for line := range strings.SplitSeq(string(out), "\n") {
+		for field := range strings.FieldsSeq(strings.ReplaceAll(line, ",", " ")) {
+			field = strings.Trim(field, `"'`)
+			if !ValidNamespaceName(field) {
+				continue
+			}
+			if _, duplicate := seen[field]; duplicate {
+				continue
+			}
+			seen[field] = struct{}{}
+			names = append(names, field)
+		}
+	}
+	return names
 }
 
 func (c *Control) exec(ctx context.Context, timeout time.Duration, subcommand ...string) ([]byte, error) {

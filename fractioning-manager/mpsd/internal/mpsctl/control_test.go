@@ -498,3 +498,260 @@ func TestParsePIDsRejectsTheTruncatedTableFormat(t *testing.T) {
 		t.Errorf("parsePIDs(csv output) = %v, want %v", got, want)
 	}
 }
+
+// ── namespaces ──────────────────────────────────────────────────────────────
+
+// TestNamespaceCommandArgs pins the exact argv of every namespace command.
+//
+// The argv is the whole contract with nvidia-cuda-mps-control, and each piece
+// of it fails differently when wrong: a missing -p talks to a different control
+// daemon, a missing --server puts the namespace on the wrong server, and a
+// misspelled --active-thread-percentage means the namespace is created and
+// never capped — a container that looks provisioned and is not.
+func TestNamespaceCommandArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(c *Control) error
+		want []string
+	}{
+		{
+			name: "create",
+			call: func(c *Control) error { return c.CreateNamespace(context.Background(), "shared", "kai_abc_0011") },
+			want: []string{"-p", "3", "namespace", "create", "kai_abc_0011", "--server=shared"},
+		},
+		{
+			name: "set active thread percentage",
+			call: func(c *Control) error {
+				return c.SetNamespaceActiveThreadPercentage(context.Background(), "shared", "kai_abc_0011", 25)
+			},
+			want: []string{"-p", "3", "namespace", "set", "kai_abc_0011", "--server=shared", "--active-thread-percentage=25"},
+		},
+		{
+			name: "delete",
+			call: func(c *Control) error { return c.DeleteNamespace(context.Background(), "shared", "kai_abc_0011") },
+			want: []string{"-p", "3", "namespace", "delete", "kai_abc_0011", "--server=shared"},
+		},
+		{
+			name: "get pipe directory",
+			call: func(c *Control) error {
+				_, err := c.NamespacePipeDirectory(context.Background(), "shared", "kai_abc_0011")
+				return err
+			},
+			want: []string{"-p", "3", "namespace", "get", "kai_abc_0011", "shared", "pipe_directory"},
+		},
+		{
+			name: "list",
+			call: func(c *Control) error {
+				_, err := c.NamespaceNames(context.Background(), "shared")
+				return err
+			},
+			want: []string{"-p", "3", "namespace", "list", "--server=shared"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &recorder{out: []byte("/run/nvidia-mps/shared/kai_abc_0011\n")}
+			c := New(Options{Binary: "mps", ControlPort: "3", Run: rec.run, Log: quietLogger()})
+
+			if err := tt.call(c); err != nil {
+				t.Fatalf("call returned error: %v", err)
+			}
+			if got := rec.call(t, 0); !slices.Equal(got, tt.want) {
+				t.Errorf("argv = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNamespaceCommandsRejectInvalidNames keeps a name the daemon cannot accept
+// from reaching it.
+//
+// The daemon's rule is [a-z0-9_]+, and Kubernetes names routinely break it:
+// hyphens are everywhere and uppercase is legal in a container id's hex only by
+// convention. Rejecting here rather than there matters because the daemon's own
+// refusal names nothing about which input was wrong — and because a name that
+// slipped through on a delete could, at worst, address a namespace other than
+// the intended one.
+func TestNamespaceCommandsRejectInvalidNames(t *testing.T) {
+	invalid := []string{
+		"",
+		"kai-abc",  // hyphen
+		"KAI_ABC",  // uppercase
+		"kai abc",  // space
+		"kai/abc",  // path separator
+		"kai.abc",  // dot
+		"kai\nabc", // newline: an injection attempt, not a name
+	}
+
+	for _, name := range invalid {
+		rec := &recorder{}
+		c := New(Options{Binary: "mps", ControlPort: "3", Run: rec.run, Log: quietLogger()})
+
+		if err := c.CreateNamespace(context.Background(), "shared", name); err == nil {
+			t.Errorf("CreateNamespace(%q) error = nil, want a rejection", name)
+		}
+		if err := c.DeleteNamespace(context.Background(), "shared", name); err == nil {
+			t.Errorf("DeleteNamespace(%q) error = nil, want a rejection", name)
+		}
+		if err := c.SetNamespaceActiveThreadPercentage(context.Background(), "shared", name, 50); err == nil {
+			t.Errorf("SetNamespaceActiveThreadPercentage(%q) error = nil, want a rejection", name)
+		}
+		if len(rec.calls) != 0 {
+			t.Errorf("name %q reached the control daemon as %v", name, rec.calls)
+		}
+	}
+}
+
+// TestSetActiveThreadPercentageRange: 0 is "unlimited" to MPS, so a cap of 0
+// would be the opposite of a cap, and anything over 100 is not a share of a
+// card. Neither should reach the daemon, where the failure would be a generic
+// usage error.
+func TestSetActiveThreadPercentageRange(t *testing.T) {
+	for _, percent := range []int{-1, 0, 101, 1000} {
+		rec := &recorder{}
+		c := New(Options{Binary: "mps", ControlPort: "3", Run: rec.run, Log: quietLogger()})
+
+		if err := c.SetNamespaceActiveThreadPercentage(context.Background(), "shared", "kai_x_1", percent); err == nil {
+			t.Errorf("percentage %d was accepted, want a rejection", percent)
+		}
+		if len(rec.calls) != 0 {
+			t.Errorf("percentage %d reached the control daemon as %v", percent, rec.calls)
+		}
+	}
+
+	for _, percent := range []int{1, 50, 100} {
+		rec := &recorder{}
+		c := New(Options{Binary: "mps", ControlPort: "3", Run: rec.run, Log: quietLogger()})
+		if err := c.SetNamespaceActiveThreadPercentage(context.Background(), "shared", "kai_x_1", percent); err != nil {
+			t.Errorf("percentage %d was rejected: %v", percent, err)
+		}
+	}
+}
+
+// TestParseAbsolutePath covers the output shapes `namespace get` might print a
+// path in. The path is bind-mounted into a container, so a misread is not a
+// failed command — it is a container mounted somewhere else, which is exactly
+// how a workload ends up in the uncapped default namespace.
+func TestParseAbsolutePath(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want string
+	}{
+		{name: "bare value", out: "/run/nvidia-mps/shared/kai_a_1\n", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "key and value", out: "pipe_directory: /run/nvidia-mps/shared/kai_a_1\n", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "key=value", out: "pipe_directory=/run/nvidia-mps/shared/kai_a_1", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "quoted", out: `"/run/nvidia-mps/shared/kai_a_1"`, want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "csv row", out: "kai_a_1,shared,/run/nvidia-mps/shared/kai_a_1", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{name: "trailing slash is cleaned", out: "/run/nvidia-mps/shared/kai_a_1/", want: "/run/nvidia-mps/shared/kai_a_1"},
+		{
+			// A banner ahead of the value must not hide it, and must not be
+			// mistaken for it either.
+			name: "value after prose",
+			out:  "Querying namespace kai_a_1\n/run/nvidia-mps/shared/kai_a_1\nmps-control>",
+			want: "/run/nvidia-mps/shared/kai_a_1",
+		},
+		{name: "no path at all", out: "Error: unknown namespace\n"},
+		{name: "a relative path is not a pipe directory", out: "shared/kai_a_1\n"},
+		{name: "empty", out: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseAbsolutePath([]byte(tt.out)); got != tt.want {
+				t.Errorf("parseAbsolutePath(%q) = %q, want %q", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNamespacePipeDirectoryRejectsOutputWithNoPath: a `namespace get` that
+// prints something other than a path (an error, a usage message, nothing) must
+// be an error and not an empty pipe directory, which the caller would otherwise
+// hand to a container as CUDA_MPS_PIPE_DIRECTORY.
+func TestNamespacePipeDirectoryRejectsOutputWithNoPath(t *testing.T) {
+	rec := &recorder{out: []byte("Error: namespace 'kai_a_1' does not exist\n")}
+	c := New(Options{Binary: "mps", Run: rec.run, Log: quietLogger()})
+
+	dir, err := c.NamespacePipeDirectory(context.Background(), "shared", "kai_a_1")
+	if err == nil {
+		t.Fatalf("NamespacePipeDirectory() = %q, nil; want an error", dir)
+	}
+	if dir != "" {
+		t.Errorf("NamespacePipeDirectory() returned %q alongside an error, want \"\"", dir)
+	}
+}
+
+// TestParseNamespaceNames pins the permissive list parse. It is allowed to pick
+// up extra tokens — reconciliation filters on its own generated prefix — but it
+// must never MISS a real namespace, because a namespace that does not appear in
+// the list is one reconciliation believes it has to create again.
+func TestParseNamespaceNames(t *testing.T) {
+	tests := []struct {
+		name string
+		out  string
+		want []string
+	}{
+		{name: "empty", out: ""},
+		{
+			name: "one per line",
+			out:  "default\nkai_abc_0011\nkai_def_0022\n",
+			want: []string{"default", "kai_abc_0011", "kai_def_0022"},
+		},
+		{
+			// Other columns contribute tokens that are not namespaces — "100"
+			// is a valid name by the daemon's rule and there is no way to tell
+			// it from one by looking. Tolerated deliberately: reconciliation
+			// acts only on names carrying its own prefix, so a column value can
+			// never become something it deletes, whereas a parse tight enough
+			// to exclude them could exclude a real namespace and have
+			// reconciliation try to recreate one that exists.
+			name: "csv columns are collected too, and that is harmless",
+			out:  "default,100\nkai_abc_0011,25\n",
+			want: []string{"default", "100", "kai_abc_0011", "25"},
+		},
+		{
+			name: "a header row does not hide the rows under it",
+			out:  "name,active_thread_percentage\nkai_abc_0011,25\n",
+			want: []string{"name", "active_thread_percentage", "kai_abc_0011", "25"},
+		},
+		{
+			name: "invalid tokens are dropped",
+			out:  "KAI_ABC\nkai-abc\n/run/nvidia-mps\nkai_ok_1\n",
+			want: []string{"kai_ok_1"},
+		},
+		{
+			name: "duplicates collapse, first occurrence wins the order",
+			out:  "b\na\nb\n",
+			want: []string{"b", "a"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseNamespaceNames([]byte(tt.out)); !slices.Equal(got, tt.want) {
+				t.Errorf("parseNamespaceNames(%q) = %v, want %v", tt.out, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidNamespaceName is the daemon's acceptance rule, pinned. Everything
+// that derives a namespace name has to produce something this accepts, and the
+// hyphen and uppercase cases are the ones Kubernetes names actually hit.
+func TestValidNamespaceName(t *testing.T) {
+	valid := []string{"a", "0", "_", "kai_abc_0011", "default", "shared"}
+	for _, name := range valid {
+		if !ValidNamespaceName(name) {
+			t.Errorf("ValidNamespaceName(%q) = false, want true", name)
+		}
+	}
+
+	invalid := []string{"", "A", "kai-abc", "kai.abc", "kai abc", "kai/abc", "käi", "kai\tabc"}
+	for _, name := range invalid {
+		if ValidNamespaceName(name) {
+			t.Errorf("ValidNamespaceName(%q) = true, want false", name)
+		}
+	}
+}
