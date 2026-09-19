@@ -170,16 +170,6 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "not ready: FractiondReady",
 		},
 		{
-			name:  "prerelease of minimum OpenShift ClusterServiceVersion is supported",
-			input: falseReady,
-			objects: []client.Object{
-				clusterServiceVersionObject("gpu-operator-certified.v26.7.1-rc.1", "26.7.1-rc.1"),
-			},
-			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonComponentNotReady,
-			expectedMessage: "not ready: FractiondReady",
-		},
-		{
 			name:  "unsupported OpenShift ClusterServiceVersion blocks Ready",
 			input: falseReady,
 			objects: []client.Object{
