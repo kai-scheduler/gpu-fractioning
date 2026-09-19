@@ -64,6 +64,16 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
+			name:  "prerelease of minimum GPU Operator version is supported",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.1-rc.1"}, clusterPolicyStatus("ready", "True", "False", "")),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
 			name:  "true Ready condition is blocked when GPU Operator version is unsupported",
 			input: trueReady,
 			objects: []client.Object{
@@ -116,6 +126,16 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "v26.7.0",
 		},
 		{
+			name:  "prerelease below the minimum GPU Operator version blocks Ready",
+			input: falseReady,
+			objects: []client.Object{
+				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.0-rc.1"}, clusterPolicyStatus("ready", "True", "False", "")),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			expectedMessage: "v26.7.0-rc.1",
+		},
+		{
 			name:  "ClusterPolicy Error condition blocks Ready with its message",
 			input: falseReady,
 			objects: []client.Object{
@@ -144,6 +164,16 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			input: falseReady,
 			objects: []client.Object{
 				clusterServiceVersionObject("gpu-operator-certified.v26.7.1", "26.7.1"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonComponentNotReady,
+			expectedMessage: "not ready: FractiondReady",
+		},
+		{
+			name:  "prerelease of minimum OpenShift ClusterServiceVersion is supported",
+			input: falseReady,
+			objects: []client.Object{
+				clusterServiceVersionObject("gpu-operator-certified.v26.7.1-rc.1", "26.7.1-rc.1"),
 			},
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonComponentNotReady,

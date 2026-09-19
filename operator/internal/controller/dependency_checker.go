@@ -220,7 +220,11 @@ func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
 			rawVersion, source, minimumGPUOperatorVersion)
 	}
 
-	if semver.Compare(version, minimumGPUOperatorVersion) < 0 {
+	// A prerelease from the minimum supported patch train provides the same
+	// GPU Operator API baseline. Compare the release cores so, for example,
+	// v26.7.1-rc.1 satisfies a v26.7.1 floor while v26.7.0-rc.1 does not.
+	versionCore, _ := splitSemverSuffix(version)
+	if semver.Compare(versionCore, minimumGPUOperatorVersion) < 0 {
 		return fmt.Sprintf("NVIDIA GPU Operator version %s is below minimum supported version %s",
 			rawVersion, minimumGPUOperatorVersion)
 	}
