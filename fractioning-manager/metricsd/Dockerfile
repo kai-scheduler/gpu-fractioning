@@ -57,7 +57,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # CGO_ENABLED=1 and the NVML bindings dlopen libnvidia-ml.so at runtime; the
 # driver itself is injected by the NVIDIA container runtime. No OS packages are
 # added on top of the base.
-FROM nvcr.io/nvidia/distroless/go:v4.1.3
+FROM nvcr.io/nvidia/distroless/go:v4.1.4
 
 # Root, because reading per-process GPU state through NVML requires it. The base
 # image defaults to its non-root `nvs` user, so this has to be explicit.
