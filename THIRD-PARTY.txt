@@ -383,7 +383,7 @@ golang.org/x/mod
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/net
-    Version:      v0.57.0
+    Version:      v0.58.0
     Source:       https://cs.opensource.google/go/x/net
     Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text 911f8f578293]
@@ -413,7 +413,7 @@ golang.org/x/term
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/text
-    Version:      v0.40.0
+    Version:      v0.41.0
     Source:       https://cs.opensource.google/go/x/text
     Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text 911f8f578293]
@@ -443,7 +443,7 @@ google.golang.org/genproto/googleapis/rpc
     License:      LICENSE [text cfc7749b96f6]
 
 google.golang.org/grpc
-    Version:      v1.83.0
+    Version:      v1.83.2
     Source:       https://github.com/grpc/grpc-go
     Linked into:  fractiond, operator
     License:      LICENSE [text cfc7749b96f6], NOTICE.txt [text 693ff28ec216]
@@ -590,7 +590,7 @@ text cfc7749b96f6 — applies to:
     github.com/go-openapi/swag@v0.23.0 (LICENSE)
     google.golang.org/genproto/googleapis/api@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
     google.golang.org/genproto/googleapis/rpc@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
-    google.golang.org/grpc@v1.83.0 (LICENSE)
+    google.golang.org/grpc@v1.83.2 (LICENSE)
     k8s.io/api@v0.36.3 (LICENSE)
     k8s.io/apiextensions-apiserver@v0.36.0 (LICENSE)
     k8s.io/apimachinery@v0.36.3 (LICENSE)
@@ -1026,12 +1026,12 @@ text c71d239df917 — applies to:
 text 911f8f578293 — applies to:
     golang.org/x/exp@v0.0.0-20251219203646-944ab1f22d93 (LICENSE)
     golang.org/x/mod@v0.38.0 (LICENSE)
-    golang.org/x/net@v0.57.0 (LICENSE)
+    golang.org/x/net@v0.58.0 (LICENSE)
     golang.org/x/oauth2@v0.36.0 (LICENSE)
     golang.org/x/sync@v0.22.0 (LICENSE)
     golang.org/x/sys@v0.47.0 (LICENSE)
     golang.org/x/term@v0.45.0 (LICENSE)
-    golang.org/x/text@v0.40.0 (LICENSE)
+    golang.org/x/text@v0.41.0 (LICENSE)
     golang.org/x/time@v0.14.0 (LICENSE)
 ------------------------------------------------------------------------------
 
@@ -2935,7 +2935,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 693ff28ec216 — applies to:
-    google.golang.org/grpc@v1.83.0 (NOTICE.txt)
+    google.golang.org/grpc@v1.83.2 (NOTICE.txt)
 ------------------------------------------------------------------------------
 
 Copyright 2014 gRPC authors.
