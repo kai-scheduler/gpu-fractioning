@@ -52,10 +52,19 @@ var clusterServiceVersionGVK = schema.GroupVersionKind{
 // GpuOperatorDependencyChecker checks the NVIDIA GPU Operator ClusterPolicy.
 type GpuOperatorDependencyChecker struct {
 	reader client.Reader
+
+	// skipVersionChecks is the installation-time bypass (Helm value
+	// skipGpuStackVersionChecks -> SKIP_GPU_STACK_VERSION_CHECKS). When true,
+	// the GPU stack version gates are not evaluated at all, so an install whose
+	// versions the operator reads wrongly can be unblocked without a code
+	// rollback — the same revert-lever pattern as supportSmSharing. It disables
+	// verification only: it does not make an unsupported GPU stack work.
+	// ClusterPolicy readiness is still checked.
+	skipVersionChecks bool
 }
 
-func NewGpuOperatorDependencyChecker(reader client.Reader) GpuOperatorDependencyChecker {
-	return GpuOperatorDependencyChecker{reader: reader}
+func NewGpuOperatorDependencyChecker(reader client.Reader, skipVersionChecks bool) GpuOperatorDependencyChecker {
+	return GpuOperatorDependencyChecker{reader: reader, skipVersionChecks: skipVersionChecks}
 }
 
 func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha1.GpuFractioningConfig, ready metav1.Condition) (metav1.Condition, error) {
@@ -68,6 +77,14 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 			fmt.Sprintf("unable to read NVIDIA GPU Operator ClusterPolicy: %v", err)), nil
 	}
 	if clusterPolicy == nil {
+		if c.skipVersionChecks {
+			// The ClusterServiceVersion is read only to discover the GPU
+			// Operator version. With the version gates bypassed there is
+			// nothing left to check on this path, and no readiness state to
+			// read either.
+			return ready, nil
+		}
+
 		version, found, err := c.clusterServiceVersionGPUOperatorVersion(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -91,9 +108,11 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 		return ready, nil
 	}
 
-	version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
-	if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
-		return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
+	if !c.skipVersionChecks {
+		version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
+		if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
+			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
+		}
 	}
 
 	if ready.Status == metav1.ConditionFalse {

@@ -123,6 +123,17 @@ func main() {
 	supportSMSharing := env.Bool("SUPPORT_SM_SHARING", true)
 	setupLog.Info("sm-sharing compute mode support", "enabled", supportSMSharing)
 
+	// ── GPU stack version-check bypass (Helm-injected) ───────────────────
+	// A revert lever for the dependency version gates: when the operator reads
+	// an installation's GPU stack versions wrongly and refuses to roll out, this
+	// unblocks it without a code rollback. It disables verification only — it
+	// does not make an unsupported GPU stack work.
+	skipGPUStackVersionChecks := env.Bool("SKIP_GPU_STACK_VERSION_CHECKS", false)
+	if skipGPUStackVersionChecks {
+		setupLog.Info("GPU stack version checks are bypassed; dependency versions will not be verified. " +
+			"An unsupported GPU stack now rolls out silently instead of being reported on the Ready condition")
+	}
+
 	// ── FIPS mode (Helm-injected; forwarded to every daemon container) ──
 	// Carried as the chart's own "off"/"on"/"only" vocabulary rather than a bool
 	// so the operator's pod spec states the installation's compliance posture
@@ -154,6 +165,7 @@ func main() {
 		mpsdAuditLog,
 		supportSMSharing,
 		fipsOnly,
+		skipGPUStackVersionChecks,
 	).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gpufractioningconfig")
 		os.Exit(1)

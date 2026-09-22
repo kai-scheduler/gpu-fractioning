@@ -120,13 +120,17 @@ func TestGpuOperatorDependencyGVKExists(t *testing.T) {
 }
 
 func gpuOperatorCheckerWithClusterPolicyVersion(version string) GpuOperatorDependencyChecker {
+	return newGpuOperatorChecker(version, false)
+}
+
+func newGpuOperatorChecker(version string, skipVersionChecks bool) GpuOperatorDependencyChecker {
 	return NewGpuOperatorDependencyChecker(fake.NewClientBuilder().
 		WithScheme(newDependencyScheme()).
 		WithObjects(clusterPolicyObject(
 			map[string]string{clusterPolicyVersionLabel: version},
 			clusterPolicyStatus("ready", "True", "False", ""),
 		)).
-		Build())
+		Build(), skipVersionChecks)
 }
 
 // Fixed args passed to every NewGpuFractioningConfigReconciler call below;
@@ -135,6 +139,10 @@ const (
 	testMpsdAuditLogTrue     = true
 	testSupportSMSharingTrue = true
 	testFIPSOnlyDisabled     = false
+
+	// testSkipGpuStackVersionChecksDisabled keeps the GPU stack version gates on,
+	// which is the default and what every reconciler test below exercises.
+	testSkipGpuStackVersionChecksDisabled = false
 )
 
 var _ = Describe("GpuFractioningConfig Controller", func() {
@@ -178,6 +186,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -204,6 +213,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -216,6 +226,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
 
@@ -237,6 +248,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
 
@@ -261,10 +273,36 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			Expect(ready.Message).To(ContainSubstring("v26.7.0"))
 		})
 
+		It("should keep Ready true on an unsupported GPU Operator version when the version checks are bypassed", func() {
+			controllerReconciler := NewGpuFractioningConfigReconciler(
+				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
+				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				true,
+			)
+			// The bypass reaches the checker the reconciler builds for itself,
+			// not just the one this test substitutes below.
+			Expect(controllerReconciler.GpuOperatorChecker.skipVersionChecks).To(BeTrue())
+			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker("v26.7.0", true)
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(reconcile.Result{}))
+
+			var updated gpufractioningv1alpha1.GpuFractioningConfig
+			Expect(k8sClient.Get(ctx, typeNamespacedName, &updated)).To(Succeed())
+			ready := meta.FindStatusCondition(updated.Status.Conditions, daemonmgr.ConditionReady)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+			Expect(ready.Reason).To(Equal(daemonmgr.ReasonAllComponentsReady))
+		})
+
 		It("should tolerate missing GPU Operator sources and retry sooner when daemon readiness is false", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", nil, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -286,6 +324,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -302,6 +341,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -414,6 +454,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			reconciler = NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(20),
 				namespace, defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+				testSkipGpuStackVersionChecksDisabled,
 			)
 			createdNodes = nil
 		})

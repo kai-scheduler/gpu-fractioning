@@ -57,6 +57,8 @@ spec:
               value: {{ .Values.mpsd.auditLog | quote }}
             - name: SUPPORT_SM_SHARING
               value: {{ .Values.supportSmSharing | quote }}
+            - name: SKIP_GPU_STACK_VERSION_CHECKS
+              value: {{ .Values.skipGpuStackVersionChecks | quote }}
             - name: DAEMON_SERVICE_ACCOUNT_NAME
               value: {{ include "gpu-fractioning.daemonServiceAccountName" . | quote }}
             {{- /*

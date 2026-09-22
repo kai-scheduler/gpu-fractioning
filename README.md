@@ -70,6 +70,8 @@ The label is written by mpsd during startup. NVIDIA GPU Operator driver upgrades
 
 Use v26.7.1 rather than v26.7.0: on v26.7.1 the bundled device-plugin and container-toolkit versions are already the ones GPU fractioning needs, and the driver is the only thing you have to override. On v26.7.0 the device-plugin and toolkit had to be overridden as well.
 
+The GPU Operator version gate reads the umbrella version and not the operand versions it actually depends on, so it can refuse a cluster whose device-plugin and container-toolkit are in fact supported — a v26.7.0 install with both overridden, for instance. `--set skipGpuStackVersionChecks=true` unblocks such an install without waiting for a fixed operator build. It turns the verification off rather than making an unsupported stack work: with the gate off, a GPU stack that genuinely cannot enforce GPU memory limits rolls the daemons out anyway, `Ready` goes True, and GPU memory goes unfenced with nothing reported. Confirm the installed operand versions yourself before setting it.
+
 If a GPU node ends up on an older driver, the `GpuFractioningConfig` `Ready` condition reports it (`GPUDriverVersionUnsupported`) and the node-level daemons are not rolled out there.
 
 ## Install
@@ -96,6 +98,7 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 |-------|---------|---------|
 | `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access |
 | `supportSmSharing` | `true` | installation-time toggle for the `sm-sharing` compute mode (mpsd's shared MPS server + fractiond's routing to it); disable it to revert to pre-feature behaviour without a code rollback, and the `gpu-compute.mode: sm-sharing` annotation is rejected like any other invalid value. Applies to containers created afterwards — stop sm-sharing workloads and drain the shared server before disabling |
+| `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
 | `metricsAgent.enabled` | `true` | run the metricsd metrics sidecar |
 | `metrics.enabled` / `metrics.port` | `true` / `8080` | controller metrics endpoint (plain HTTP) |
 | `prometheus.enabled` | `false` | install a `ServiceMonitor` + `PodMonitor` (also requires `metrics.enabled` and the Prometheus-Operator CRDs) |
