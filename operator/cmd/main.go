@@ -130,7 +130,9 @@ func main() {
 	// does not make an unsupported GPU stack work.
 	skipGPUStackVersionChecks := env.Bool("SKIP_GPU_STACK_VERSION_CHECKS", false)
 	if skipGPUStackVersionChecks {
-		setupLog.Info("GPU stack version checks are bypassed; dependency versions will not be verified. " +
+		// logr has no warning level, so a nil-error Error call is how this
+		// codebase raises one (see the component image check above).
+		setupLog.Error(nil, "GPU stack version checks are bypassed; dependency versions will not be verified. "+
 			"An unsupported GPU stack now rolls out silently instead of being reported on the Ready condition")
 	}
 
