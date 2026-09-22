@@ -96,6 +96,12 @@ type GpuFractioningConfigReconciler struct {
 	// See daemonmgr.FIPSOnlyEnv.
 	FIPSOnly bool
 
+	// SkipGpuStackVersionChecks is the Helm-injected installation-time bypass
+	// for the GPU stack version gates, forwarded to GpuOperatorChecker. It
+	// disables verification only — it does not make an unsupported GPU stack
+	// work. See GpuOperatorDependencyChecker.
+	SkipGpuStackVersionChecks bool
+
 	// GpuOperatorChecker checks NVIDIA GPU Operator dependency failures against
 	// the aggregate Ready condition. Version validation runs even when managed
 	// daemons are healthy so a GPU Operator downgrade is reflected in status as
@@ -120,20 +126,22 @@ func NewGpuFractioningConfigReconciler(
 	mpsdAuditLog bool,
 	supportSMSharing bool,
 	fipsOnly bool,
+	skipGpuStackVersionChecks bool,
 ) *GpuFractioningConfigReconciler {
 	return &GpuFractioningConfigReconciler{
-		Client:                   c,
-		APIReader:                apiReader,
-		Scheme:                   scheme,
-		Recorder:                 recorder,
-		Namespace:                namespace,
-		DefaultImages:            defaultImages,
-		DaemonServiceAccountName: daemonServiceAccountName,
-		MpsdAuditLog:             mpsdAuditLog,
-		SupportSMSharing:         supportSMSharing,
-		FIPSOnly:                 fipsOnly,
-		GpuOperatorChecker:       NewGpuOperatorDependencyChecker(apiReader),
-		GpuDriverChecker:         NewGpuDriverDependencyChecker(apiReader),
+		Client:                    c,
+		APIReader:                 apiReader,
+		Scheme:                    scheme,
+		Recorder:                  recorder,
+		Namespace:                 namespace,
+		DefaultImages:             defaultImages,
+		DaemonServiceAccountName:  daemonServiceAccountName,
+		MpsdAuditLog:              mpsdAuditLog,
+		SupportSMSharing:          supportSMSharing,
+		FIPSOnly:                  fipsOnly,
+		SkipGpuStackVersionChecks: skipGpuStackVersionChecks,
+		GpuOperatorChecker:        NewGpuOperatorDependencyChecker(apiReader, skipGpuStackVersionChecks),
+		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader),
 	}
 }
 

@@ -72,6 +72,21 @@ runtimeClassName: "nvidia"
 # (nvidia-cuda-mps-control -p 3 client list, run in the mpsd pod).
 supportSmSharing: true
 
+# skipGpuStackVersionChecks bypasses the operator's NVIDIA GPU stack version
+# gates. It is an escape hatch, not a supported configuration: when the operator
+# reads an installation's versions wrongly and refuses to roll out, this unblocks
+# it without a code rollback.
+#
+# It disables verification only — it does not make an unsupported GPU stack work.
+# With the gates off, a GPU stack that genuinely cannot enforce GPU memory limits
+# rolls the daemons out anyway, Ready goes True, and nothing reports the problem:
+# fractiond injects the limits and no CDI hook applies them, so GPU memory goes
+# unfenced. Only set this when you have confirmed out of band that the installed
+# versions are supported and the operator is misreading them.
+#
+# The NVIDIA driver version check is separate and is not bypassed by this value.
+skipGpuStackVersionChecks: false
+
 # mpsd configures the MPS daemon (mpsd) managed by the operator.
 mpsd:
   # auditLog toggles features.memacct.audit_log in the generated MPS

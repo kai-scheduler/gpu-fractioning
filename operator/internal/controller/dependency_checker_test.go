@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -46,12 +47,13 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		input           metav1.Condition
-		objects         []client.Object
-		expectedStatus  metav1.ConditionStatus
-		expectedReason  string
-		expectedMessage string
+		name              string
+		input             metav1.Condition
+		objects           []client.Object
+		skipVersionChecks bool
+		expectedStatus    metav1.ConditionStatus
+		expectedReason    string
+		expectedMessage   string
 	}{
 		{
 			name:  "true Ready condition stays true when GPU Operator version is supported",
@@ -234,6 +236,52 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
 			expectedMessage: clusterPolicyVersionLabel,
 		},
+		{
+			name:  "bypass leaves true Ready true on an unsupported GPU Operator version",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("ready", "True", "False", "")),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+			expectedMessage:   daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			name:  "bypass leaves true Ready true when the version label is missing",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyObject(nil, clusterPolicyStatus("ready", "True", "False", "")),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+			expectedMessage:   daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// The bypass disables the version gates only; a ClusterPolicy that
+			// reports a failure still refines an already-unhealthy Ready.
+			name:  "bypass still reports ClusterPolicy readiness failures",
+			input: falseReady,
+			objects: []client.Object{
+				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("notReady", "False", "True", "operand failed")),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionFalse,
+			expectedReason:    daemonmgr.ReasonGPUOperatorNotReady,
+			expectedMessage:   "operand failed",
+		},
+		{
+			name:  "bypass leaves false Ready unchanged on an unsupported OpenShift ClusterServiceVersion",
+			input: falseReady,
+			objects: []client.Object{
+				clusterServiceVersionObject("gpu-operator-certified.v26.3.3", "26.3.3"),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionFalse,
+			expectedReason:    daemonmgr.ReasonComponentNotReady,
+			expectedMessage:   "not ready: FractiondReady",
+		},
 	}
 
 	for _, tt := range tests {
@@ -242,7 +290,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 				WithScheme(clusterPolicyScheme(t)).
 				WithObjects(tt.objects...).
 				Build()
-			checker := NewGpuOperatorDependencyChecker(reader)
+			checker := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks)
 
 			got, err := checker.Check(context.Background(), config, tt.input)
 			if err != nil {
@@ -273,7 +321,7 @@ func TestGpuOperatorDependencyChecker_ToleratesMissingDependencyAPIs(t *testing.
 		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
 	}
 
-	got, err := NewGpuOperatorDependencyChecker(missingDependencyAPIReader{}).Check(context.Background(), config, ready)
+	got, err := NewGpuOperatorDependencyChecker(missingDependencyAPIReader{}, false).Check(context.Background(), config, ready)
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -283,6 +331,77 @@ func TestGpuOperatorDependencyChecker_ToleratesMissingDependencyAPIs(t *testing.
 	if got.Reason != daemonmgr.ReasonAllComponentsReady {
 		t.Fatalf("Reason = %q, expected %q", got.Reason, daemonmgr.ReasonAllComponentsReady)
 	}
+}
+
+// The ClusterServiceVersion is read only to discover a version, so the bypass
+// must stop the operator from reading it at all. Otherwise a cluster whose CSV
+// list fails for a reason the checker cannot dismiss — RBAC, an unavailable API
+// server — still has Ready blocked over a version nothing is going to check,
+// which is exactly what the bypass exists to clear.
+func TestGpuOperatorDependencyChecker_ClusterServiceVersionListError(t *testing.T) {
+	ready := metav1.Condition{
+		Type:               daemonmgr.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 7,
+		Reason:             daemonmgr.ReasonAllComponentsReady,
+		Message:            daemonmgr.MessageAllComponentsReady,
+	}
+	config := &v1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
+	}
+
+	tests := []struct {
+		name              string
+		skipVersionChecks bool
+		expectedStatus    metav1.ConditionStatus
+		expectedReason    string
+	}{
+		{
+			name:              "version checks on",
+			skipVersionChecks: false,
+			expectedStatus:    metav1.ConditionFalse,
+			expectedReason:    daemonmgr.ReasonGPUOperatorNotReady,
+		},
+		{
+			name:              "version checks bypassed",
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := clusterServiceVersionErrorReader{}
+			got, err := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks).Check(context.Background(), config, ready)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			if got.Status != tt.expectedStatus {
+				t.Fatalf("Status = %s, expected %s", got.Status, tt.expectedStatus)
+			}
+			if got.Reason != tt.expectedReason {
+				t.Fatalf("Reason = %q, expected %q", got.Reason, tt.expectedReason)
+			}
+		})
+	}
+}
+
+// clusterServiceVersionErrorReader reports no ClusterPolicy and fails the
+// ClusterServiceVersion list with an error the checker cannot dismiss.
+type clusterServiceVersionErrorReader struct{}
+
+func (clusterServiceVersionErrorReader) Get(context.Context, types.NamespacedName, client.Object, ...client.GetOption) error {
+	return apierrors.NewNotFound(schema.GroupResource{Group: "test.kai.scheduler", Resource: "missing"}, "")
+}
+
+func (clusterServiceVersionErrorReader) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+	if list.GetObjectKind().GroupVersionKind().Kind == clusterServiceVersionGVK.Kind+"List" {
+		return apierrors.NewForbidden(
+			schema.GroupResource{Group: clusterServiceVersionGVK.Group, Resource: "clusterserviceversions"},
+			"", errors.New("not authorized"))
+	}
+	return nil
 }
 
 type missingDependencyAPIReader struct{}

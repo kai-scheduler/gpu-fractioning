@@ -25,6 +25,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - metricsd metric names are now configurable via Helm (`metricsAgent.metricNames.{gpuMemoryUsedBytes,gpuSmUtilizationPercent,gpuSmUtilizationPercentNormalized}`), and the per-pod metric labels are `namespace, pod, pod_uuid, gpu_uuid, gpu` (renamed from `pod_uid`/`gpu_index`) to integrate with external metric consumers.
 - New `sm-sharing` GPU compute-sharing mode, selected per-container via `nvidia.com/container.<container-name>.gpu-compute.mode: "time-slicing" | "sm-sharing"` (defaults to `time-slicing`, today's unchanged behavior). mpsd runs a second, parameterless MPS server (`context-share` enabled, with the default socket excluded from context sharing so only containers routed to the shared server share a context — time-slicing containers keep the default socket and their memacct-enforced memory limits) alongside the default one; fractiond routes a container annotated `sm-sharing` to that shared server's socket instead, so its GPU compute is shared via MPS (concurrent SM occupancy) rather than time-sliced. Any other annotation value — including a present-but-empty one — fails container creation (or falls back to `time-slicing` under fail-open). The whole feature is gated by a new installation-time Helm value, `supportSmSharing` (defaults to `true`); disabling it reverts to pre-feature behaviour without a code rollback — mpsd reverts to its pre-feature MPS config and daemon invocation (the shared server and its required multiuser mode both go away) and fractiond rejects the `sm-sharing` annotation like any other invalid value. The toggle applies to containers created afterwards and does not migrate running ones, so stop sm-sharing workloads and confirm the shared server has no clients before disabling it.
 
+- New installation-time Helm value `skipGpuStackVersionChecks` (defaults to
+  `false`), an escape hatch that bypasses the operator's NVIDIA GPU stack version
+  gates. The GPU Operator gate reads the umbrella version rather than the
+  container-toolkit and device-plugin versions gpu-fractioning actually depends
+  on, so it can refuse a cluster whose operands are supported — a v26.7.0
+  install with both overridden, for instance — and the daemons never roll out.
+  Setting this value unblocks such an install without a code rollback. It
+  disables verification only and does not make an unsupported GPU stack work:
+  with the gates off, a stack that cannot enforce GPU memory limits rolls out
+  anyway, `Ready` goes True, and GPU memory goes unfenced with nothing reported
+  on any condition. ClusterPolicy readiness reporting and the NVIDIA driver
+  version check are unaffected.
+
 - FIPS 140-3 support. Every release now publishes a second set of images, tagged
   `<version>-fips`, whose Go binaries link the CMVP-validated Go Cryptographic
   Module (pinned to `v1.0.0`, CMVP Certificate #5247) instead of the standard
