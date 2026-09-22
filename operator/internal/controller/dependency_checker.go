@@ -76,43 +76,20 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 		return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorNotReady,
 			fmt.Sprintf("unable to read NVIDIA GPU Operator ClusterPolicy: %v", err)), nil
 	}
-	if clusterPolicy == nil {
-		if c.skipVersionChecks {
-			// The ClusterServiceVersion is read only to discover the GPU
-			// Operator version. With the version gates bypassed there is
-			// nothing left to check on this path, and no readiness state to
-			// read either.
-			return ready, nil
-		}
-
-		version, found, err := c.clusterServiceVersionGPUOperatorVersion(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ready, err
-			}
-			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorNotReady,
-				fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err)), nil
-		}
-		if !found {
-			return ready, nil
-		}
-		// OpenShift installations may not expose the NVIDIA ClusterPolicy CR.
-		// In that case the OLM ClusterServiceVersion can tell us the installed
-		// GPU Operator version, but not operand/readiness state. If the CSV
-		// version is supported, treat the GPU Operator dependency as not the
-		// cause of the current GpuFractioningConfig failure and leave the original
-		// Ready condition unchanged.
-		if msg := gpuOperatorVersionFailureMessage(version, "ClusterServiceVersion"); msg != "" {
-			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
-		}
-		return ready, nil
+	reason, message, err := c.versionFailure(ctx, clusterPolicy)
+	if err != nil {
+		return ready, err
+	}
+	if reason != "" {
+		return gpuOperatorReadyCondition(config.Generation, reason, message), nil
 	}
 
-	if !c.skipVersionChecks {
-		version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
-		if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
-			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorVersionUnsupported, msg), nil
-		}
+	if clusterPolicy == nil {
+		// The OLM ClusterServiceVersion carries no operand or readiness state,
+		// so the version gate above is all this path can check. Treat the GPU
+		// Operator dependency as not the cause of the current
+		// GpuFractioningConfig failure and leave Ready unchanged.
+		return ready, nil
 	}
 
 	if ready.Status == metav1.ConditionFalse {
@@ -122,6 +99,49 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 	}
 
 	return ready, nil
+}
+
+// versionFailure evaluates the GPU Operator version gate and returns the Ready
+// condition reason and message for a version that does not meet the minimum, or
+// empty strings when it does, when no version source is present, or when the
+// gate is bypassed.
+//
+// This is the one place skipVersionChecks is honoured. Reading a version is all
+// this function does, so bypassing the gate here means no version is read at
+// all — including the ClusterServiceVersion list, whose failure would otherwise
+// block Ready over a version nothing is going to check.
+//
+// clusterPolicy may be nil: OpenShift installations may not expose the NVIDIA
+// ClusterPolicy CR, and the OLM ClusterServiceVersion is then the only source
+// of the installed GPU Operator version.
+func (c GpuOperatorDependencyChecker) versionFailure(ctx context.Context, clusterPolicy *unstructured.Unstructured) (reason, message string, err error) {
+	if c.skipVersionChecks {
+		return "", "", nil
+	}
+
+	if clusterPolicy != nil {
+		version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
+		if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
+			return daemonmgr.ReasonGPUOperatorVersionUnsupported, msg, nil
+		}
+		return "", "", nil
+	}
+
+	version, found, err := c.clusterServiceVersionGPUOperatorVersion(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", "", err
+		}
+		return daemonmgr.ReasonGPUOperatorNotReady,
+			fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err), nil
+	}
+	if !found {
+		return "", "", nil
+	}
+	if msg := gpuOperatorVersionFailureMessage(version, "ClusterServiceVersion"); msg != "" {
+		return daemonmgr.ReasonGPUOperatorVersionUnsupported, msg, nil
+	}
+	return "", "", nil
 }
 
 // GpuDriverDependencyChecker checks the gpu-fractioning-owned NVIDIA driver

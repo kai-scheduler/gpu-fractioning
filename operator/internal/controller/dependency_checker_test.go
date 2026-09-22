@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -330,6 +331,77 @@ func TestGpuOperatorDependencyChecker_ToleratesMissingDependencyAPIs(t *testing.
 	if got.Reason != daemonmgr.ReasonAllComponentsReady {
 		t.Fatalf("Reason = %q, expected %q", got.Reason, daemonmgr.ReasonAllComponentsReady)
 	}
+}
+
+// The ClusterServiceVersion is read only to discover a version, so the bypass
+// must stop the operator from reading it at all. Otherwise a cluster whose CSV
+// list fails for a reason the checker cannot dismiss — RBAC, an unavailable API
+// server — still has Ready blocked over a version nothing is going to check,
+// which is exactly what the bypass exists to clear.
+func TestGpuOperatorDependencyChecker_ClusterServiceVersionListError(t *testing.T) {
+	ready := metav1.Condition{
+		Type:               daemonmgr.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 7,
+		Reason:             daemonmgr.ReasonAllComponentsReady,
+		Message:            daemonmgr.MessageAllComponentsReady,
+	}
+	config := &v1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
+	}
+
+	tests := []struct {
+		name              string
+		skipVersionChecks bool
+		expectedStatus    metav1.ConditionStatus
+		expectedReason    string
+	}{
+		{
+			name:              "version checks on",
+			skipVersionChecks: false,
+			expectedStatus:    metav1.ConditionFalse,
+			expectedReason:    daemonmgr.ReasonGPUOperatorNotReady,
+		},
+		{
+			name:              "version checks bypassed",
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := clusterServiceVersionErrorReader{}
+			got, err := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks).Check(context.Background(), config, ready)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			if got.Status != tt.expectedStatus {
+				t.Fatalf("Status = %s, expected %s", got.Status, tt.expectedStatus)
+			}
+			if got.Reason != tt.expectedReason {
+				t.Fatalf("Reason = %q, expected %q", got.Reason, tt.expectedReason)
+			}
+		})
+	}
+}
+
+// clusterServiceVersionErrorReader reports no ClusterPolicy and fails the
+// ClusterServiceVersion list with an error the checker cannot dismiss.
+type clusterServiceVersionErrorReader struct{}
+
+func (clusterServiceVersionErrorReader) Get(context.Context, types.NamespacedName, client.Object, ...client.GetOption) error {
+	return apierrors.NewNotFound(schema.GroupResource{Group: "test.kai.scheduler", Resource: "missing"}, "")
+}
+
+func (clusterServiceVersionErrorReader) List(_ context.Context, list client.ObjectList, _ ...client.ListOption) error {
+	if list.GetObjectKind().GroupVersionKind().Kind == clusterServiceVersionGVK.Kind+"List" {
+		return apierrors.NewForbidden(
+			schema.GroupResource{Group: clusterServiceVersionGVK.Group, Resource: "clusterserviceversions"},
+			"", errors.New("not authorized"))
+	}
+	return nil
 }
 
 type missingDependencyAPIReader struct{}
