@@ -207,15 +207,26 @@ def create_cluster(config: ClusterConfig) -> bool:
     registries_yaml_path = write_registries_yaml(config)
     _, registry_full = registry_name(config)
 
-    # k3d indexes agents 0..(total-1). GPU agents come first and carry the
-    # nvidia.com/gpu.present=true label; the remaining agents stay unlabeled
-    # (non-GPU workers). This label is what everything downstream selects on: the
-    # nvml-mock DaemonSet's nodeSelector (which must match before it can schedule
-    # and patch the node), the operator's default-CR nodeSelector, and the
-    # fractiond/mpsd DaemonSets.
+    # k3d indexes agents 0..(total-1). GPU agents come first and carry the GPU
+    # node labels below; the remaining agents stay unlabeled (non-GPU workers).
+    #
+    #   nvidia.com/gpu.present      what everything downstream selects on: the
+    #                               nvml-mock DaemonSet's nodeSelector (which must
+    #                               match before it can schedule and patch the
+    #                               node) and the operator's default-CR nodeSelector.
+    #   nvidia.com/gpu.deploy.client  the gpu-operator's third-party GPU client
+    #                               declaration, which the operator adds to the
+    #                               fractiond/mpsd nodeSelector so a driver upgrade
+    #                               evicts them. The fake gpu-operator does not
+    #                               maintain it, so set it here — without it the
+    #                               daemons have nowhere to schedule and the suite
+    #                               fails in preflight with "no plugin pods found".
     total_agents = config.gpu_worker_nodes + config.non_gpu_worker_nodes
     gpu_node_filter = ";".join(f"agent:{i}" for i in range(config.gpu_worker_nodes))
-    gpu_node_label = f"nvidia.com/gpu.present=true@{gpu_node_filter}"
+    gpu_node_labels = [
+        f"nvidia.com/gpu.present=true@{gpu_node_filter}",
+        f"nvidia.com/gpu.deploy.client=true@{gpu_node_filter}",
+    ]
 
     try:
         for attempt in range(1, config.max_retries + 1):
@@ -229,7 +240,7 @@ def create_cluster(config: ClusterConfig) -> bool:
                     "--servers", "1",
                     "--agents", str(total_agents),
                     "--image", config.k3s_image,
-                    "--k3s-node-label", gpu_node_label,
+                    *[arg for label in gpu_node_labels for arg in ("--k3s-node-label", label)],
                     "--volume", f"{nri_template_path}:/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl@server:0;agent:*",
                     # Connect the local registry to the cluster network (so its
                     # name resolves inside nodes) and add the localhost mirror so
