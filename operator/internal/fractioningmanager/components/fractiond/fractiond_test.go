@@ -51,6 +51,12 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	if spec.NodeSelector == nil || spec.NodeSelector["nvidia.com/gpu.present"] != "true" {
 		t.Errorf("NodeSelector = %v, expected nvidia.com/gpu.present=true", spec.NodeSelector)
 	}
+	// The pod holds NVML/GPU handles through the metricsd sidecar, so it carries
+	// the gpu-operator's third-party GPU client label like mpsd does.
+	if spec.NodeSelector[daemonmgr.GPUDeployClientLabel] != daemonmgr.GPUDeployClientValue {
+		t.Errorf("NodeSelector[%s] = %q, expected %q",
+			daemonmgr.GPUDeployClientLabel, spec.NodeSelector[daemonmgr.GPUDeployClientLabel], daemonmgr.GPUDeployClientValue)
+	}
 
 	// Two containers: fractiond (the NRI plugin) + metricsd (the metrics sidecar).
 	if len(spec.Containers) != 2 {

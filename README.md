@@ -162,7 +162,7 @@ A single cluster-scoped CR configures the whole stack. Field docs are authoritat
 
 | Field | Description |
 |-------|-------------|
-| `spec.nodeSelector` *(required)* | Which nodes the fractiond/mpsd DaemonSets target. **Immutable** — set once at creation. |
+| `spec.nodeSelector` *(required)* | Which nodes the fractiond/mpsd DaemonSets target. **Immutable** — set once at creation. The operator adds `nvidia.com/gpu.deploy.client=true` to the daemons' own nodeSelector on top of this (see below), so it does not belong here. |
 | `spec.runtimeClassName` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access. Defaults to `nvidia`; set `""` to use the node default runtime. |
 | `spec.fractioningAgent` | fractiond options (annotation prefix, log level, fail-open, retroactive enforcement). |
 | `spec.metricsAgent` | metricsd options (`enabled`, metric-name overrides, extra NVML volumes/mounts). |
@@ -172,6 +172,21 @@ Status is surfaced as conditions on the CR:
 - **`FractiondReady`** / **`MpsdReady`** — per-daemon rollout health (ready vs desired nodes).
 - **`Ready`** — aggregate health of the managed daemons. When not ready, it is refined with NVIDIA GPU Operator dependency failures (e.g. the GPU Operator is missing or below the required version) to explain why.
 - **`DriverUpgradeInProgress`** — `True` while a targeted GPU node is undergoing an NVIDIA driver upgrade; the daemons are automatically drained from that node (so MPS shuts down cleanly before the driver unloads) and rescheduled when it completes.
+
+### Coordinating with NVIDIA driver upgrades
+
+mpsd holds the NVIDIA kernel module open for as long as it runs, so it has to be off a node before the driver there can be unloaded. Two independent mechanisms take care of that, and both are automatic:
+
+- The daemons carry **`nvidia.com/gpu.deploy.client=true`** in their nodeSelector. This is the GPU Operator's declaration that a node runs third-party GPU *client* pods — daemons that hold GPU device handles through the nvidia runtime rather than by requesting the `nvidia.com/gpu` resource. The GPU Operator moves the label off `true` while it upgrades a node, which drains the daemons, and it waits for them to terminate before unloading the driver. Without the label the daemons are invisible to the upgrade: its pod-deletion step selects only pods that requested `nvidia.com/gpu`, and both that step and the drain fallback ignore DaemonSets outright.
+- A required nodeAffinity on **`nvidia.com/gpu-driver-upgrade-state`** keeps the daemons off any node whose label is set to something other than the terminal `upgrade-done`.
+
+The operator adds both to the DaemonSets it builds; there is nothing to configure. Note that the first one makes the label a **scheduling requirement** — on a cluster whose GPU Operator does not set `nvidia.com/gpu.deploy.client` the daemons will not schedule at all. GPU Operator v26.7.0 and newer set it, which every supported version satisfies.
+
+You can see where a node stands with:
+
+```sh
+kubectl get nodes -L nvidia.com/gpu.deploy.client,nvidia.com/gpu-driver-upgrade-state
+```
 
 Per-node health is also published as a `gpu-fractioning.nvidia.com/Ready` **node condition** (refined with the CUDA driver version when a node is unhealthy).
 

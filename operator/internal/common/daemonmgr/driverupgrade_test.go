@@ -26,6 +26,43 @@ func TestDriverUpgradeActive(t *testing.T) {
 	}
 }
 
+func TestDaemonNodeSelector(t *testing.T) {
+	cr := map[string]string{"nvidia.com/gpu.present": "true"}
+
+	got := DaemonNodeSelector(cr)
+
+	if got["nvidia.com/gpu.present"] != "true" {
+		t.Errorf("CR selector not preserved: %v", got)
+	}
+	if got[GPUDeployClientLabel] != GPUDeployClientValue {
+		t.Errorf("got[%s] = %q, want %q", GPUDeployClientLabel, got[GPUDeployClientLabel], GPUDeployClientValue)
+	}
+	// The CR's map is shared with the reconciler's node-listing paths, which must
+	// keep selecting every targeted node — including ones the gpu-operator has
+	// paused mid-upgrade.
+	if _, added := cr[GPUDeployClientLabel]; added {
+		t.Errorf("DaemonNodeSelector mutated the CR selector: %v", cr)
+	}
+}
+
+// A CR pinning the label to another value would silently opt out of
+// driver-upgrade coordination, so the daemon's own value has to win.
+func TestDaemonNodeSelectorOverridesConflictingValue(t *testing.T) {
+	got := DaemonNodeSelector(map[string]string{GPUDeployClientLabel: "false"})
+
+	if got[GPUDeployClientLabel] != GPUDeployClientValue {
+		t.Errorf("got[%s] = %q, want %q", GPUDeployClientLabel, got[GPUDeployClientLabel], GPUDeployClientValue)
+	}
+}
+
+func TestDaemonNodeSelectorNilCRSelector(t *testing.T) {
+	got := DaemonNodeSelector(nil)
+
+	if len(got) != 1 || got[GPUDeployClientLabel] != GPUDeployClientValue {
+		t.Errorf("DaemonNodeSelector(nil) = %v, want just %s=%s", got, GPUDeployClientLabel, GPUDeployClientValue)
+	}
+}
+
 // The managed daemon must schedule only where the upgrade label is absent or
 // upgrade-done, so the DaemonSet controller drains it from upgrading nodes.
 func TestBaseDaemonSetDriverUpgradeAffinity(t *testing.T) {

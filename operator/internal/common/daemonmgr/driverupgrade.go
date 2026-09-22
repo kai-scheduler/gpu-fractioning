@@ -27,7 +27,51 @@ const (
 	// daemons are drained). It is orthogonal to Ready and must be excluded from
 	// the Ready aggregation.
 	ConditionDriverUpgradeInProgress = "DriverUpgradeInProgress"
+
+	// GPUDeployClientLabel is the NVIDIA gpu-operator node label that declares a
+	// node as running third-party GPU *client* pods: daemons that hold GPU device
+	// handles through the nvidia runtime (NVIDIA_VISIBLE_DEVICES) instead of
+	// requesting the nvidia.com/gpu resource. It is a FROZEN external contract
+	// owned by the gpu-operator and stays under nvidia.com.
+	//
+	// Carrying it in the daemon's nodeSelector is the gpu-operator's supported way
+	// for an out-of-tree GPU client to take part in driver upgrades. Without it we
+	// are invisible to the upgrade: its pod-deletion step selects only pods that
+	// requested nvidia.com/gpu, and both that step and the drain fallback hardcode
+	// IgnoreAllDaemonSets. mpsd would keep the driver module pinned, the unload
+	// would fail with EBUSY, and the driver pod would CrashLoopBackOff.
+	//
+	// The gpu-operator moves the label off "true" (to paused-for-driver-upgrade)
+	// while it upgrades a node, which drains us the same way
+	// driverUpgradeNodeAffinity does — but on a signal it always emits, and it
+	// waits for the pods to actually terminate before unloading the driver.
+	GPUDeployClientLabel = "nvidia.com/gpu.deploy.client"
+
+	// GPUDeployClientValue is the only GPUDeployClientLabel value that means
+	// "GPU clients may run here". Every other value, including the gpu-operator's
+	// paused-for-driver-upgrade, must keep the managed daemons off the node.
+	GPUDeployClientValue = "true"
 )
+
+// DaemonNodeSelector returns the nodeSelector for a managed daemon pod: the CR's
+// nodeSelector plus GPUDeployClientLabel.
+//
+// The label is added here rather than in the CR's spec.nodeSelector because that
+// field is immutable (CEL-enforced); requiring it there would force every
+// existing user to delete and recreate their GpuFractioningConfig to get the fix.
+//
+// crSelector is never mutated: it is the CR's own map, shared by the node-listing
+// paths in the reconciler.
+func DaemonNodeSelector(crSelector map[string]string) map[string]string {
+	selector := make(map[string]string, len(crSelector)+1)
+	for key, value := range crSelector {
+		selector[key] = value
+	}
+	// Set last, deliberately: a CR that pins this key to another value would
+	// otherwise opt itself out of driver-upgrade coordination.
+	selector[GPUDeployClientLabel] = GPUDeployClientValue
+	return selector
+}
 
 // DriverUpgradeActive reports whether a DriverUpgradeStateLabel value indicates
 // an in-progress upgrade: any value set other than the terminal "upgrade-done".
