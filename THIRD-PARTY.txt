@@ -377,7 +377,7 @@ golang.org/x/exp
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/mod
-    Version:      v0.38.0
+    Version:      v0.40.0
     Source:       https://cs.opensource.google/go/x/mod
     Linked into:  fractiond, operator
     License:      LICENSE [text 911f8f578293]
@@ -1025,7 +1025,7 @@ text c71d239df917 — applies to:
 ------------------------------------------------------------------------------
 text 911f8f578293 — applies to:
     golang.org/x/exp@v0.0.0-20251219203646-944ab1f22d93 (LICENSE)
-    golang.org/x/mod@v0.38.0 (LICENSE)
+    golang.org/x/mod@v0.40.0 (LICENSE)
     golang.org/x/net@v0.58.0 (LICENSE)
     golang.org/x/oauth2@v0.36.0 (LICENSE)
     golang.org/x/sync@v0.22.0 (LICENSE)

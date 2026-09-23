@@ -51,7 +51,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /out/metricsd ./cmd
 
-# UBI9 base, pulled from NGC. Adds no OS packages; only the metricsd binary.
+# UBI9 base, pulled from NGC. Installs no new OS packages; it patches the ones
+# the base already carries and drops those nothing here uses (see below).
 #
 # metricsd needs a glibc and dynamic loader: it is built CGO_ENABLED=1 and the
 # NVML bindings dlopen libnvidia-ml.so at runtime, which the NVIDIA container
@@ -62,6 +63,43 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # GPU node, where metricsd (a sidecar in the fractiond DaemonSet) and mpsd are
 # always co-resident.
 FROM nvcr.io/nvidia/cuda:13.3.1-base-ubi9
+
+# Base-image hardening, byte-identical to the mpsd runtime stage — change
+# one, change the other. Unused tooling is removed rather than patched, and
+# omitting --nodeps lets rpm verify the runtime closure at build time. Steps
+# are &&-chained so a failed step fails the build; set -e alone would not, as
+# errexit is exempt for non-final commands in an && list. Keeps glibc, bash
+# and coreutils (mpsd's probes exec `test`).
+RUN set -e; \
+    dnf -y --setopt=install_weak_deps=False update && \
+    dnf -y clean all && \
+    PRUNE="" && \
+    for pkg in \
+        gdb-gdbserver vim-minimal \
+        python3 python3-libs python3-chardet python3-dateutil python3-dbus \
+        python3-decorator python3-gobject-base python3-gobject-base-noarch \
+        python3-gpg python3-idna python3-iniparse python3-inotify python3-pip-wheel \
+        python3-pysocks python3-requests python3-rpm python3-setuptools \
+        python3-setuptools-wheel python3-six python3-systemd python3-urllib3 \
+        systemd systemd-libs systemd-pam systemd-rpm-macros \
+        dbus dbus-broker dbus-common dbus-libs \
+        dnf dnf-data yum python3-dnf python3-dnf-plugins-core libdnf python3-libdnf \
+        python3-hawkey libcomps python3-libcomps librepo python3-librepo \
+        libmodulemd libsolv librhsm \
+        subscription-manager subscription-manager-rhsm-certificates \
+        libdnf-plugin-subscription-manager python3-subscription-manager-rhsm \
+        python3-cloud-what \
+        glib2 gobject-introspection json-glib \
+        libuser usermode passwd shadow-utils \
+        virt-what dmidecode iproute libbpf libmnl psmisc \
+        gnupg2 gpgme libassuan libksba npth rpm-sign-libs crypto-policies-scripts \
+        expat util-linux util-linux-core libblkid libmount libfdisk libsmartcols \
+        libuuid \
+    ; do \
+        rpm -q "$pkg" >/dev/null 2>&1 && PRUNE="$PRUNE $pkg" || true; \
+    done && \
+    if [ -n "$PRUNE" ]; then rpm -e $PRUNE; fi && \
+    rm -rf /var/cache/dnf /var/cache/yum
 
 # Root, because reading per-process GPU state through NVML requires it. The base
 # image defaults to its non-root `nvs` user, so this has to be explicit.
