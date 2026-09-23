@@ -47,7 +47,7 @@ It is designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler
 
 - Kubernetes 1.28+
 - containerd 2.0+ with **NRI enabled**, or CRI-O with NRI support
-- [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) **v26.7.1 or newer**, which provides the default `nvidia` [RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/) for daemon GPU/NVML access
+- [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) **v26.7.0 or newer**, which provides the default `nvidia` [RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/) for daemon GPU/NVML access, running a **container toolkit v1.20.1 or newer** and a **device plugin v0.20.1 or newer** — see below
 - **NVIDIA driver `r615` or newer (CUDA 13.4)** on the GPU nodes — see below, this is *not* the GPU Operator default
 - A scheduler that assigns fractional GPUs — designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler)
 
@@ -70,7 +70,43 @@ The label is written by mpsd during startup. NVIDIA GPU Operator driver upgrades
 
 Use v26.7.1 rather than v26.7.0: on v26.7.1 the bundled device-plugin and container-toolkit versions are already the ones GPU fractioning needs, and the driver is the only thing you have to override. On v26.7.0 the device-plugin and toolkit had to be overridden as well.
 
-The GPU Operator version gate reads the umbrella version and not the operand versions it actually depends on, so it can refuse a cluster whose device-plugin and container-toolkit are in fact supported — a v26.7.0 install with both overridden, for instance. `--set skipGpuStackVersionChecks=true` unblocks such an install without waiting for a fixed operator build. It turns the verification off rather than making an unsupported stack work: with the gate off, a GPU stack that genuinely cannot enforce GPU memory limits rolls the daemons out anyway, `Ready` goes True, and GPU memory goes unfenced with nothing reported. Confirm the installed operand versions yourself before setting it.
+### GPU Operator operand versions
+
+What GPU fractioning depends on is two GPU Operator operands, not the GPU Operator version that bundles them:
+
+| Operand | Minimum | Why |
+|---------|---------|-----|
+| container toolkit | `v1.20.1` | carries the `apply-cuda-memory-limits` CDI hook that applies the GPU-memory limits fractiond injects |
+| device plugin | `v0.20.1` | required for fractional GPU allocation |
+
+Both are independently overridable, so v26.7.0 works as long as they are overridden along with the driver:
+
+```sh
+helm install gpu-operator nvidia/gpu-operator \
+  --version v26.7.0 \
+  --namespace gpu-operator --create-namespace \
+  --set driver.version=615.<patch> \
+  --set toolkit.version=v1.20.1-ubuntu20.04 \
+  --set devicePlugin.version=v0.20.1
+```
+
+The operator reads both from the `ClusterPolicy` (`spec.toolkit.version` and `spec.devicePlugin.version`) and reports an operand below its minimum on the `Ready` condition as `GPUOperandVersionUnsupported`, without rolling out the node-level daemons. How an operand is recorded decides what can be checked:
+
+| `spec.<operand>.version` | Effective version | Checked against |
+|--------------------------|-------------------|-----------------|
+| a version tag (`v1.20.1-ubuntu20.04`) | that tag | the operand minimum, directly |
+| unset | the GPU Operator's own build default | the GPU Operator floor, **v26.7.1** |
+| an opaque tag such as a digest | that image | nothing — not checked |
+
+An unset operand is not unchecked: leaving it out means the GPU Operator supplies its build's default, so its own version is what determines the operand, and the floor is the first release whose defaults satisfy both. That inference is only valid because nothing pinned the operand — which is exactly why it is *not* applied to one that is pinned. A digest is neither: it names an image the GPU Operator version says nothing about, and an unreadable version is not evidence of an unsupported one, so it does not block.
+
+The same floor applies where there is no `ClusterPolicy` at all and the version comes from the OLM `ClusterServiceVersion` instead — an OpenShift install, typically — for the same reason: no operand versions are readable there, so defaults are all that can be inferred. An install that overrode its operands onto supported versions on top of an older operator is rejected on that path, since the overrides are invisible. Use `skipGpuStackVersionChecks` if that is your situation.
+
+If these checks read your install wrongly, `--set skipGpuStackVersionChecks=true` bypasses all of them. It turns verification off rather than making an unsupported stack work: with the gates off, a GPU stack that cannot enforce GPU memory limits rolls the daemons out anyway, `Ready` goes True, and GPU memory goes unfenced with nothing reported. Confirm the operand versions yourself before setting it:
+
+```sh
+kubectl get clusterpolicy -o jsonpath='{.items[0].spec.toolkit.version}{"\n"}{.items[0].spec.devicePlugin.version}{"\n"}'
+```
 
 If a GPU node ends up on an older driver, the `GpuFractioningConfig` `Ready` condition reports it (`GPUDriverVersionUnsupported`) and the node-level daemons are not rolled out there.
 
@@ -98,7 +134,7 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 |-------|---------|---------|
 | `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access |
 | `supportSmSharing` | `true` | installation-time toggle for the `sm-sharing` compute mode (mpsd's shared MPS server + fractiond's routing to it); disable it to revert to pre-feature behaviour without a code rollback, and the `gpu-compute.mode: sm-sharing` annotation is rejected like any other invalid value. Applies to containers created afterwards — stop sm-sharing workloads and drain the shared server before disabling |
-| `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
+| `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates (GPU Operator, container toolkit, device plugin) when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
 | `metricsAgent.enabled` | `true` | run the metricsd metrics sidecar |
 | `metrics.enabled` / `metrics.port` | `true` / `8080` | controller metrics endpoint (plain HTTP) |
 | `prometheus.enabled` | `false` | install a `ServiceMonitor` + `PodMonitor` (also requires `metrics.enabled` and the Prometheus-Operator CRDs) |

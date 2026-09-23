@@ -33,6 +33,7 @@ const (
 	ReasonAllDaemonsReady               = "AllDaemonsReady"
 	ReasonGPUOperatorNotReady           = "GPUOperatorNotReady"
 	ReasonGPUOperatorVersionUnsupported = "GPUOperatorVersionUnsupported"
+	ReasonGPUOperandVersionUnsupported  = "GPUOperandVersionUnsupported"
 	ReasonGPUDriverVersionMissing       = "GPUDriverVersionMissing"
 	ReasonGPUDriverVersionInvalid       = "GPUDriverVersionInvalid"
 	ReasonGPUDriverVersionUnsupported   = "GPUDriverVersionUnsupported"
