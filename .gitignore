@@ -10,6 +10,9 @@ testbin/
 # Go build/test cache (workspace-local GOCACHE used by e2e runs)
 .gocache/
 
+# Go build/test scratch (workspace-local GOTMPDIR alongside .gocache/)
+.gotmp/
+
 # Python bytecode cache (e2e cluster-prep scripts)
 __pycache__/
 
