@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // TestE2E_FullGPUPodIsExcludedFromMetrics verifies that a pod requesting

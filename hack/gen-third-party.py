@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-FIRST_PARTY = "github.com/kai-scheduler/kai-gpu-fractioning"
+FIRST_PARTY = "github.com/kai-scheduler/gpu-fractioning"
 OUTPUT = REPO / "THIRD-PARTY.txt"
 
 # (binary name, module directory, main package) — the binaries shipped in the
@@ -169,7 +169,7 @@ def render() -> str:
     out.append("THIRD-PARTY SOFTWARE NOTICES AND INFORMATION")
     out.append("=" * 78)
     out.append("")
-    out.append("kai-gpu-fractioning")
+    out.append("gpu-fractioning")
     out.append("Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.")
     out.append("SPDX-License-Identifier: Apache-2.0")
     out.append("")
@@ -180,7 +180,7 @@ def render() -> str:
         "below. They are statically linked into the binaries shipped in the"
     )
     out.append(
-        "kai-gpu-fractioning container images. Each component remains subject to its"
+        "gpu-fractioning container images. Each component remains subject to its"
     )
     out.append("own license, reproduced in the LICENSE TEXTS section.")
     out.append("")

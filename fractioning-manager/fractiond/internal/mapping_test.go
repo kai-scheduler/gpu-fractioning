@@ -11,9 +11,9 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
 // testMemPrefix is the GPU-memory annotation prefix used by the mapping tests. A

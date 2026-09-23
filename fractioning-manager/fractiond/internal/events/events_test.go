@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
 
 type fakeWriter struct {

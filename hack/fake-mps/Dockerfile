@@ -19,7 +19,7 @@ WORKDIR /workspace
 
 # Real mpsd supervisor (same code as fractioning-manager/mpsd/build/Dockerfile).
 # pkg/ is copied before `go mod download` because the root go.mod has
-# `replace github.com/kai-scheduler/kai-gpu-fractioning/pkg => ./pkg`.
+# `replace github.com/kai-scheduler/gpu-fractioning/pkg => ./pkg`.
 COPY go.mod go.sum ./
 COPY pkg/ pkg/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download

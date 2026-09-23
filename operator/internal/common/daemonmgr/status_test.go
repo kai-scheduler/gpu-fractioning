@@ -9,7 +9,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 )
 
 func TestDaemonHealthToCondition(t *testing.T) {

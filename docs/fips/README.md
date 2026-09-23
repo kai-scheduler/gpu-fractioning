@@ -55,7 +55,7 @@ FIPS images, no runtime enforcement. This is the setting to use in production:
 
 ```sh
 helm install gpu-fractioning \
-  oci://ghcr.io/kai-scheduler/kai-gpu-fractioning/gpu-fractioning \
+  oci://ghcr.io/kai-scheduler/gpu-fractioning \
   --version <VERSION> \
   --namespace gpu-fractioning --create-namespace \
   --set global.fipsMode=on
@@ -115,7 +115,7 @@ Most of these images have no shell, so copy the binary out rather than running
 anything inside:
 
 ```sh
-IMAGE=ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:<VERSION>-fips
+IMAGE=ghcr.io/kai-scheduler/gpu-fractioning/operator:<VERSION>-fips
 CID=$(docker create --platform linux/amd64 "$IMAGE")
 docker cp "$CID:/manager" ./manager && docker rm -f "$CID"
 
@@ -142,7 +142,7 @@ Every release runs this check across all four images and both architectures:
 
 ```sh
 hack/verify-fips-images.sh \
-  --repo ghcr.io/kai-scheduler/kai-gpu-fractioning \
+  --repo ghcr.io/kai-scheduler/gpu-fractioning \
   --tag <VERSION>-fips \
   --module "$(make -s print-gofips140-version)" \
   --platforms linux/amd64,linux/arm64

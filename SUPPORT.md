@@ -1,6 +1,6 @@
 # Support
 
-How to get help with **kai-gpu-fractioning**. It is community supported by its
+How to get help with **gpu-fractioning**. It is community supported by its
 [maintainers](MAINTAINERS.md); it does not come with a commercial support contract.
 
 ## Where to get help
@@ -9,7 +9,7 @@ How to get help with **kai-gpu-fractioning**. It is community supported by its
 | --- | --- |
 | Understand what this does and how to install it | [README.md](README.md) |
 | Ask a question, or discuss an idea | The `#kai-scheduler` channel on the [CNCF Slack](https://slack.cncf.io), which the maintainers of this repository read |
-| Report a bug, or request a feature | [GitHub issues](https://github.com/kai-scheduler/kai-gpu-fractioning/issues) |
+| Report a bug, or request a feature | [GitHub issues](https://github.com/kai-scheduler/gpu-fractioning/issues) |
 | Report a security vulnerability | **Not an issue** — the private channels in [SECURITY.md](SECURITY.md) |
 | Contribute a change | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Know who maintains this | [MAINTAINERS.md](MAINTAINERS.md) |

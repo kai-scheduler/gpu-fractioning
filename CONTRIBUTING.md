@@ -1,6 +1,6 @@
-# Contributing to kai-gpu-fractioning
+# Contributing to gpu-fractioning
 
-Thank you for contributing to kai-gpu-fractioning.
+Thank you for contributing to gpu-fractioning.
 
 Read the [Code of Conduct](CODE_OF_CONDUCT.md) and the
 [Developer Certificate of Origin](CLA.md) before submitting a change.

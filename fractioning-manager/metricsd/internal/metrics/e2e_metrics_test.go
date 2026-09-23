@@ -26,7 +26,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
 
 // Fixed identities for the two-pod fractional-GPU scenario.

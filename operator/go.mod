@@ -1,10 +1,10 @@
-module github.com/kai-scheduler/kai-gpu-fractioning/operator
+module github.com/kai-scheduler/gpu-fractioning/operator
 
 go 1.26.4
 
 require (
-	github.com/kai-scheduler/kai-gpu-fractioning/api v0.0.0
-	github.com/kai-scheduler/kai-gpu-fractioning/pkg v0.0.0
+	github.com/kai-scheduler/gpu-fractioning/api v0.0.0
+	github.com/kai-scheduler/gpu-fractioning/pkg v0.0.0
 	github.com/onsi/ginkgo/v2 v2.32.0
 	github.com/onsi/gomega v1.42.1
 	github.com/prometheus/client_golang v1.24.1
@@ -16,9 +16,9 @@ require (
 	sigs.k8s.io/controller-runtime v0.24.1
 )
 
-replace github.com/kai-scheduler/kai-gpu-fractioning/api => ../api
+replace github.com/kai-scheduler/gpu-fractioning/api => ../api
 
-replace github.com/kai-scheduler/kai-gpu-fractioning/pkg => ../pkg
+replace github.com/kai-scheduler/gpu-fractioning/pkg => ../pkg
 
 require (
 	cel.dev/expr v0.25.2 // indirect

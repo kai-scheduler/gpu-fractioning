@@ -18,12 +18,12 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/harness"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/daemonset"
-	gsc "github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/nodes"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/pods"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/waiter"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/harness"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/daemonset"
+	gsc "github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/nodes"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/pods"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
 )
 
 // MpsdFaultAndRecovery — mpsd fault, AND-gated status, node isolation, and

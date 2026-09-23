@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 apiVersion: imagelock.kai-scheduler.io/v1alpha1
-name: kai-gpu-fractioning
+name: gpu-fractioning
 artifactName: gpu-fractioning
-repository: ghcr.io/kai-scheduler/kai-gpu-fractioning
+repository: ghcr.io/kai-scheduler/gpu-fractioning
 
 images:
   - name: operator

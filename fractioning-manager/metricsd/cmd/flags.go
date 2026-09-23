@@ -7,9 +7,9 @@ import (
 	"flag"
 	"time"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
 
 const (

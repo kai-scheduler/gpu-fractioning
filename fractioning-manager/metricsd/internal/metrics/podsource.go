@@ -6,7 +6,7 @@ package metrics
 import (
 	"log/slog"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
 
 // podSource resolves GPU processes to the Kubernetes pod that owns them and

@@ -6,7 +6,7 @@ package injection
 import (
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
 // The injected names are a contract with consumers outside this repo — most

@@ -4,7 +4,7 @@
 
 #
 # Build context MUST be the repository root (not fractioning-manager/metricsd): the
-# metricsd module replaces github.com/kai-scheduler/kai-gpu-fractioning => ../../ to use
+# metricsd module replaces github.com/kai-scheduler/gpu-fractioning => ../../ to use
 # the shared fractiond/mapping packages, so the root module source must be present
 # in the build. Build with:  docker build -f fractioning-manager/metricsd/Dockerfile .
 

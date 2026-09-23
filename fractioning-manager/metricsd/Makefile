@@ -1,7 +1,7 @@
 # Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-DOCKER_REPO_BASE ?= ghcr.io/kai-scheduler/kai-gpu-fractioning
+DOCKER_REPO_BASE ?= ghcr.io/kai-scheduler/gpu-fractioning
 IMAGE ?= $(DOCKER_REPO_BASE)/metricsd
 TAG ?= dev
 PLATFORMS ?= linux/amd64,linux/arm64

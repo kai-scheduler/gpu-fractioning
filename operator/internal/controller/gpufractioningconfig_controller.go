@@ -31,13 +31,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/fractioningmanager/components/fractiond"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/metrics"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/driverinfo"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/fractioningmanager/components/fractiond"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
 
 const (

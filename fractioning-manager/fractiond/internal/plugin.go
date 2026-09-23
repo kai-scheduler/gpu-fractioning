@@ -11,12 +11,12 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/audit"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/events"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/injection"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/events"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/injection"
 )
 
 // ReadinessSetter receives the plugin's NRI registration state: true once the

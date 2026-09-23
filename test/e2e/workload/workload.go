@@ -18,8 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/waiter"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
 )
 
 // DefaultImage is a minimal image with no GPU/CUDA dependency — attribution

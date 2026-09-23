@@ -10,10 +10,10 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/pods"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/portforward"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/pods"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/portforward"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/metrics"
 )
 
 // LabelSelector matches every fractiond DaemonSet pod — the metricsd metrics

@@ -9,8 +9,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/nvmlmock"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/nvmlmock"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // TestE2E_StaleSeriesPrunedAfterPodRestart verifies that when a pod is deleted

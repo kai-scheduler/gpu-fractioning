@@ -1,10 +1,10 @@
 # Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# kai-gpu-fractioning
+# gpu-fractioning
 # -----------------------------------------------------------
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-DOCKER_REPO_BASE ?= ghcr.io/kai-scheduler/kai-gpu-fractioning
+DOCKER_REPO_BASE ?= ghcr.io/kai-scheduler/gpu-fractioning
 # Target platform for image builds. GPU clusters are amd64; override for others.
 # buildkit emulates (qemu) when the host arch differs.
 PLATFORM ?= linux/amd64

@@ -10,9 +10,9 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/injection"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/injection"
 )
 
 func TestDetectorViolations(t *testing.T) {

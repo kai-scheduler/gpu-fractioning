@@ -26,9 +26,9 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/waiter"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
 )
 
 func init() {

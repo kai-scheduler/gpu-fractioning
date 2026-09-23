@@ -1,11 +1,11 @@
 # Roadmap
 
-Planned work for kai-gpu-fractioning is tracked in the open:
+Planned work for gpu-fractioning is tracked in the open:
 
-- **[GitHub issues](https://github.com/kai-scheduler/kai-gpu-fractioning/issues)** — everything the
+- **[GitHub issues](https://github.com/kai-scheduler/gpu-fractioning/issues)** — everything the
   maintainers intend to work on has an issue. Issues carry the current thinking and the discussion
   behind it, which a document like this one cannot keep up with.
-- **[Milestones](https://github.com/kai-scheduler/kai-gpu-fractioning/milestones)** — what is
+- **[Milestones](https://github.com/kai-scheduler/gpu-fractioning/milestones)** — what is
   scheduled for the next release.
 - **[CHANGELOG.md](CHANGELOG.md)** — what has already landed, including the unreleased section.
 
@@ -19,7 +19,7 @@ of the `GpuFractioningConfig` API, a change to the contract between the operator
 node-level daemons, a new component, or a change to the enforcement or security model — start as
 an issue before any pull request; see [GOVERNANCE.md](GOVERNANCE.md).
 
-kai-gpu-fractioning enforces on the node the GPU fractions that
+gpu-fractioning enforces on the node the GPU fractions that
 [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) assigns. Changes to the pod
 annotations the two projects share are agreed with the KAI Scheduler maintainers before either
 side ships them, so issues that touch that interface may be sequenced against their work.

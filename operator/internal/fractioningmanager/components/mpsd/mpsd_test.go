@@ -11,8 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 )
 
 const testDaemonServiceAccountName = "gpu-fractioning-daemon"

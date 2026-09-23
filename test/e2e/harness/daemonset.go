@@ -11,7 +11,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/daemonset"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/daemonset"
 )
 
 // GetDaemonSet is a fatal-on-error DaemonSet reader for a component.

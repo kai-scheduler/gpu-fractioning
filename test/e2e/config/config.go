@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
 
 // Config is read entirely from the environment.

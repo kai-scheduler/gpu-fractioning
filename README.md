@@ -4,7 +4,7 @@ A Kubernetes operator that enables **multiple pods to safely share a single GPU 
 
 The operator manages the full lifecycle of GPU fractioning on a cluster: it deploys an [NRI](https://github.com/containerd/nri) plugin that injects per-container GPU memory limits at container creation time — before the container process starts — and runs [NVIDIA MPS](https://docs.nvidia.com/deploy/mps/index.html) with GPU memory accounting enabled on every shared GPU.
 
-It is designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler): KAI Scheduler decides *which* fraction of *which* GPU a workload gets, and kai-gpu-fractioning enforces that memory boundary on the node and exports per-pod metrics for the resulting fractional GPUs.
+It is designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler): KAI Scheduler decides *which* fraction of *which* GPU a workload gets, and gpu-fractioning enforces that memory boundary on the node and exports per-pod metrics for the resulting fractional GPUs.
 
 ## How It Works
 
@@ -80,7 +80,7 @@ The operator and its Helm chart are published as OCI artifacts to GitHub Contain
 
 ```sh
 helm install gpu-fractioning \
-  oci://ghcr.io/kai-scheduler/kai-gpu-fractioning/gpu-fractioning \
+  oci://ghcr.io/kai-scheduler/gpu-fractioning \
   --version <VERSION> \
   --namespace gpu-fractioning --create-namespace
 ```
@@ -215,13 +215,13 @@ metricsd is a separate Go module (cgo/NVML), so it is not covered by the top-lev
 
 ## Roadmap
 
-Planned work lives in the [issue tracker](https://github.com/kai-scheduler/kai-gpu-fractioning/issues);
+Planned work lives in the [issue tracker](https://github.com/kai-scheduler/gpu-fractioning/issues);
 [ROADMAP.md](ROADMAP.md) explains where to look and how to propose something.
 
 ## Community, discussion and support
 
 - **Questions and discussion** — the `#kai-scheduler` channel on the [CNCF Slack](https://slack.cncf.io).
-- **Bugs and feature requests** — [GitHub issues](https://github.com/kai-scheduler/kai-gpu-fractioning/issues). [SUPPORT.md](SUPPORT.md) lists what to include.
+- **Bugs and feature requests** — [GitHub issues](https://github.com/kai-scheduler/gpu-fractioning/issues). [SUPPORT.md](SUPPORT.md) lists what to include.
 - **Security vulnerabilities** — never a public issue; use the private channels in [SECURITY.md](SECURITY.md).
 - **Who maintains this** — [MAINTAINERS.md](MAINTAINERS.md), governed as described in [GOVERNANCE.md](GOVERNANCE.md).
 - **Using this in production?** Add yourself to [ADOPTERS.md](ADOPTERS.md).
@@ -254,7 +254,7 @@ Third-party components statically linked into the shipped binaries are listed in
       <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/cncf/artwork/refs/heads/main/other/cncf/horizontal/color/cncf-color.svg">
       <img width="300" alt="Cloud Native Computing Foundation logo" src="https://raw.githubusercontent.com/cncf/artwork/refs/heads/main/other/cncf/horizontal/color-whitetext/cncf-color-whitetext.svg">
     </picture>
-    <p>kai-gpu-fractioning is part of <a href="https://github.com/kai-scheduler/KAI-Scheduler">KAI Scheduler</a>, a <a href="https://cncf.io">Cloud Native Computing Foundation</a> sandbox project.</p>
+    <p>gpu-fractioning is part of <a href="https://github.com/kai-scheduler/KAI-Scheduler">KAI Scheduler</a>, a <a href="https://cncf.io">Cloud Native Computing Foundation</a> sandbox project.</p>
 </div>
 
 Copyright Contributors to KAI Scheduler, established as KAI Scheduler a Series of LF Projects, LLC.

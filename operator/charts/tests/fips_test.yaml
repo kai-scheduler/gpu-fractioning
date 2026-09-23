@@ -19,7 +19,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:0.1.0
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -42,7 +42,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:0.1.0-fips
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0-fips
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -68,7 +68,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:0.1.0-fips
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0-fips
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -85,7 +85,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:v9.9.9-fips
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:v9.9.9-fips
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -98,7 +98,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator:v9.9.9
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:v9.9.9
 
   # An unrecognised value must stop the install rather than quietly fall back to
   # the regular images: a FIPS deployment that is silently not FIPS is worse

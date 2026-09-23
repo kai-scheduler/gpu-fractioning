@@ -10,7 +10,7 @@ domain: kai.scheduler
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: github.com/kai-scheduler/kai-gpu-fractioning/operator
+repo: github.com/kai-scheduler/gpu-fractioning/operator
 resources:
 - api:
     crdVersion: v1
@@ -19,6 +19,6 @@ resources:
   domain: kai.scheduler
   group: gpu-fractioning
   kind: GpuFractioningConfig
-  path: github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1
+  path: github.com/kai-scheduler/gpu-fractioning/api/v1alpha1
   version: v1alpha1
 version: "3"

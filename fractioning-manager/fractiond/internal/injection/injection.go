@@ -13,8 +13,8 @@ package injection
 import (
 	"path/filepath"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
 // Injected env-var keys the create hook sets on a GPU-fractioning container.

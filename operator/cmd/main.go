@@ -18,11 +18,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/config"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/controller"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/config"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/controller"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 	// +kubebuilder:scaffold:imports
 )
 

@@ -1,13 +1,13 @@
 THIRD-PARTY SOFTWARE NOTICES AND INFORMATION
 ==============================================================================
 
-kai-gpu-fractioning
+gpu-fractioning
 Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 
 This project incorporates the third-party open source components listed
 below. They are statically linked into the binaries shipped in the
-kai-gpu-fractioning container images. Each component remains subject to its
+gpu-fractioning container images. Each component remains subject to its
 own license, reproduced in the LICENSE TEXTS section.
 
 This file is generated. Regenerate it with `make third-party`.

@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"

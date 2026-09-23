@@ -16,14 +16,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/nodes"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/pods"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/metrics"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/nvmlmock"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/plugin"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/waiter"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/nodes"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/pods"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/nvmlmock"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/plugin"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // attributionTestNamespace hosts every workload pod these tests create —

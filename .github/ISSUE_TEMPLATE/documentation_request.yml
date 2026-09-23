@@ -26,7 +26,7 @@ body:
     attributes:
       label: Documentation location
       description: Link to the affected page or file when one exists.
-      placeholder: https://github.com/kai-scheduler/kai-gpu-fractioning/blob/main/README.md
+      placeholder: https://github.com/kai-scheduler/gpu-fractioning/blob/main/README.md
 
   - type: dropdown
     id: component
