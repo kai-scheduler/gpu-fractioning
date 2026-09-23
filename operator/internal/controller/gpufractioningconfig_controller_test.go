@@ -119,17 +119,25 @@ func TestGpuOperatorDependencyGVKExists(t *testing.T) {
 	}
 }
 
-func gpuOperatorCheckerWithClusterPolicyVersion(version string) GpuOperatorDependencyChecker {
-	return newGpuOperatorChecker(version, false)
+// Operand versions at and below their floors, used to drive the GPU Operator
+// dependency checker in the specs below.
+const (
+	supportedToolkitVersion      = "v1.20.1-ubuntu20.04"
+	supportedDevicePluginVersion = "v0.20.1"
+	oldToolkitVersion            = "v1.20.0-ubuntu20.04"
+)
+
+func gpuOperatorCheckerWithSupportedOperands() GpuOperatorDependencyChecker {
+	return newGpuOperatorChecker(supportedToolkitVersion, supportedDevicePluginVersion, false)
 }
 
-func newGpuOperatorChecker(version string, skipVersionChecks bool) GpuOperatorDependencyChecker {
+// newGpuOperatorChecker builds a checker over a ready ClusterPolicy carrying the
+// given operand versions. Those are what the ClusterPolicy path gates on; the
+// GPU Operator version label is fixed here because nothing reads it.
+func newGpuOperatorChecker(toolkitVersion, devicePluginVersion string, skipVersionChecks bool) GpuOperatorDependencyChecker {
 	return NewGpuOperatorDependencyChecker(fake.NewClientBuilder().
 		WithScheme(newDependencyScheme()).
-		WithObjects(clusterPolicyObject(
-			map[string]string{clusterPolicyVersionLabel: version},
-			clusterPolicyStatus("ready", "True", "False", ""),
-		)).
+		WithObjects(clusterPolicyOperandObject("v26.7.1", toolkitVersion, devicePluginVersion)).
 		Build(), skipVersionChecks)
 }
 
@@ -228,7 +236,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
 				testSkipGpuStackVersionChecksDisabled,
 			)
-			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
+			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithSupportedOperands()
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -244,20 +252,20 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			Expect(ready.Reason).To(Equal(daemonmgr.ReasonAllComponentsReady))
 		})
 
-		It("should mark Ready false when the GPU Operator is downgraded while daemons stay healthy", func() {
+		It("should mark Ready false when a GPU Operator operand is downgraded while daemons stay healthy", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
 				testSkipGpuStackVersionChecksDisabled,
 			)
-			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.1")
+			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithSupportedOperands()
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithClusterPolicyVersion("v26.7.0")
+			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(oldToolkitVersion, supportedDevicePluginVersion, false)
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
@@ -269,11 +277,11 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			ready := meta.FindStatusCondition(updated.Status.Conditions, daemonmgr.ConditionReady)
 			Expect(ready).NotTo(BeNil())
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-			Expect(ready.Reason).To(Equal(daemonmgr.ReasonGPUOperatorVersionUnsupported))
-			Expect(ready.Message).To(ContainSubstring("v26.7.0"))
+			Expect(ready.Reason).To(Equal(daemonmgr.ReasonGPUOperandVersionUnsupported))
+			Expect(ready.Message).To(ContainSubstring(oldToolkitVersion))
 		})
 
-		It("should keep Ready true on an unsupported GPU Operator version when the version checks are bypassed", func() {
+		It("should keep Ready true on an unsupported GPU Operator operand version when the version checks are bypassed", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
 				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
@@ -282,7 +290,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			// The bypass reaches the checker the reconciler builds for itself,
 			// not just the one this test substitutes below.
 			Expect(controllerReconciler.GpuOperatorChecker.skipVersionChecks).To(BeTrue())
-			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker("v26.7.0", true)
+			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(oldToolkitVersion, supportedDevicePluginVersion, true)
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,

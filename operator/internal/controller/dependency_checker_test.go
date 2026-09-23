@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/mod/semver"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,37 +57,44 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 		expectedMessage   string
 	}{
 		{
-			name:  "true Ready condition stays true when GPU Operator version is supported",
+			// The GPU Operator version is not gated where a ClusterPolicy
+			// exists. This is issue #120's first false rejection: an operator
+			// below the old floor whose operands were overridden onto supported
+			// versions is a working install and must roll out.
+			name:  "old GPU Operator version with supported operands leaves Ready unchanged",
 			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.1"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("v26.3.3", "v1.20.1-ubuntu20.04", "v0.20.1"),
 			},
 			expectedStatus:  metav1.ConditionTrue,
 			expectedReason:  daemonmgr.ReasonAllComponentsReady,
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			name:  "prerelease of minimum GPU Operator version is supported",
+			// A ClusterPolicy labelled only "26.7" normalizes to v26.7.0 and
+			// used to be rejected on that alone. With both operands pinned and
+			// supported the label is never read, so its shape cannot matter.
+			name:  "unparseable GPU Operator version label with pinned operands leaves Ready unchanged",
 			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.1-rc.1"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("26.7", "v1.20.1-ubuntu20.04", "v0.20.1"),
 			},
 			expectedStatus:  metav1.ConditionTrue,
 			expectedReason:  daemonmgr.ReasonAllComponentsReady,
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			name:  "true Ready condition is blocked when GPU Operator version is unsupported",
-			input: trueReady,
+			name:  "missing GPU Operator version label with pinned operands leaves Ready unchanged",
+			input: falseReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("", "v1.20.1-ubuntu20.04", "v0.20.1"),
 			},
 			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "v26.3.3",
+			expectedReason:  daemonmgr.ReasonComponentNotReady,
+			expectedMessage: "not ready: FractiondReady",
 		},
 		{
-			name:  "unready ClusterPolicy with supported version leaves true Ready unchanged",
+			name:  "unready ClusterPolicy leaves true Ready unchanged",
 			input: trueReady,
 			objects: []client.Object{
 				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.1"}, clusterPolicyStatus("notReady", "False", "False", "operator upgrade in progress")),
@@ -96,7 +104,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			name:  "ready ClusterPolicy with supported version leaves false Ready unchanged",
+			name:  "ready ClusterPolicy leaves false Ready unchanged",
 			input: falseReady,
 			objects: []client.Object{
 				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.1"}, clusterPolicyStatus("ready", "True", "False", "")),
@@ -106,36 +114,153 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "not ready: FractiondReady",
 		},
 		{
-			name:  "ready ClusterPolicy with unsupported version blocks Ready",
-			input: falseReady,
+			// The distro suffix on a toolkit tag is not a semver prerelease:
+			// comparing it as one puts v1.20.1-ubuntu20.04 below the v1.20.1
+			// floor and rejects a supported install.
+			name:  "supported operands with a distro-suffixed toolkit tag leave Ready unchanged",
+			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("v26.7.1", "v1.20.1-ubuntu20.04", "v0.20.1"),
 			},
-			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "v26.3.3",
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			// v26.7.0 is the immediately preceding patch release; the supported
-			// floor is v26.7.1, so it must be rejected.
-			name:  "ready ClusterPolicy one patch below the minimum blocks Ready",
-			input: falseReady,
+			// The case the GPU Operator version alone cannot catch: a supported
+			// operator running an operand pinned below its floor.
+			name:  "supported GPU Operator with an old container toolkit blocks Ready",
+			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.0"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("v26.7.1", "v1.20.0-ubuntu20.04", "v0.20.1"),
 			},
 			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "v26.7.0",
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnsupported,
+			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
 		},
 		{
-			name:  "prerelease below the minimum GPU Operator version blocks Ready",
-			input: falseReady,
+			name:  "old device plugin blocks Ready",
+			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.7.0-rc.1"}, clusterPolicyStatus("ready", "True", "False", "")),
+				clusterPolicyOperandObject("v26.7.1", "v1.20.1-ubuntu20.04", "v0.20.0"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnsupported,
+			expectedMessage: "device plugin version v0.20.0",
+		},
+		{
+			// The converse case, and the one that motivated this check:
+			// operands overridden onto an operator below the old floor.
+			name:  "supported operands on the GPU Operator floor leave Ready unchanged",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.0", "v1.21.0-ubuntu20.04", "v0.21.0"),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// A digest names an image the GPU Operator version says nothing
+			// about, so it is neither compared nor resolved through the floor:
+			// an unreadable version is not evidence of an unsupported one. The
+			// operator here is below the floor to prove no fallback happens.
+			name:  "digest-pinned operand version leaves Ready unchanged on an old GPU Operator",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.0", "sha256-4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", "v0.20.1"),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// An operand left unset runs the GPU Operator's own default, so the
+			// operator version determines it. On the floor, that default is
+			// supported.
+			name:  "unset operand version on a supported GPU Operator leaves Ready unchanged",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.1", "", "v0.20.1"),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// The same default below the floor ships a toolkit that cannot apply
+			// the GPU-memory limits. Nothing pinned it, so the operator version
+			// is the only evidence there is — and it is evidence.
+			name:  "unset operand version on an old GPU Operator blocks Ready",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.0", "", "v0.20.1"),
 			},
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "v26.7.0-rc.1",
+			expectedMessage: "default container toolkit version that the ClusterPolicy leaves unset",
+		},
+		{
+			// Both unset: the message names both operands so the reader knows
+			// what the operator version is standing in for.
+			name:  "all operand versions unset on an old GPU Operator names both",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.0", "", ""),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			expectedMessage: "container toolkit and device plugin version",
+		},
+		{
+			// A pinned operand below its floor is reported as itself, not
+			// deferred to the operator version, even with the other unset.
+			name:  "pinned operand below its floor wins over an unset one",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.1", "v1.20.0-ubuntu20.04", ""),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnsupported,
+			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
+		},
+		{
+			// An unset operand with no operator version to fall back on leaves
+			// the effective version unknowable, so it blocks rather than admit a
+			// stack that may not enforce GPU memory limits.
+			name:  "unset operand version with no GPU Operator version label blocks Ready",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("", "", "v0.20.1"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			expectedMessage: "is missing",
+		},
+		{
+			// The bypass returns before any version is read, so it covers the
+			// operator-floor fallback for an unset operand too, not just the
+			// operands compared directly.
+			name:  "bypass leaves an unset operand on an old GPU Operator alone",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.0", "", "v0.20.1"),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+			expectedMessage:   daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			name:  "bypass leaves an old container toolkit alone",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.1", "v1.19.0-ubuntu20.04", "v0.19.0"),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+			expectedMessage:   daemonmgr.MessageAllComponentsReady,
 		},
 		{
 			name:  "ClusterPolicy Error condition blocks Ready with its message",
@@ -182,9 +307,23 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "26.3.3",
 		},
 		{
-			// Same boundary as the ClusterPolicy case above, over the OpenShift
-			// discovery path: 26.7.0 is one patch below the supported floor.
-			name:  "OpenShift ClusterServiceVersion one patch below the minimum blocks Ready",
+			// A CSV carries no operand versions, so the coarse floor is the only
+			// gate on this path — and it is the first release whose defaults
+			// satisfy both operands, since defaults are all that can be inferred.
+			name:  "OpenShift ClusterServiceVersion at the GPU Operator floor leaves Ready unchanged",
+			input: falseReady,
+			objects: []client.Object{
+				clusterServiceVersionObject("gpu-operator-certified.v26.7.1", "26.7.1"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonComponentNotReady,
+			expectedMessage: "not ready: FractiondReady",
+		},
+		{
+			// The release below the floor ships defaults that do not satisfy the
+			// operands. With no ClusterPolicy there is no way to see whether they
+			// were overridden, so it is rejected rather than silently admitted.
+			name:  "OpenShift ClusterServiceVersion below the GPU Operator floor blocks Ready",
 			input: falseReady,
 			objects: []client.Object{
 				clusterServiceVersionObject("gpu-operator-certified.v26.7.0", "26.7.0"),
@@ -216,47 +355,18 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "not ready: FractiondReady",
 		},
 		{
+			// A ClusterPolicy short-circuits the ClusterServiceVersion lookup
+			// entirely, so a CSV below the floor alongside one must not block:
+			// where operand versions are readable they are the only gate.
 			name:  "ClusterPolicy takes precedence over OpenShift ClusterServiceVersion",
 			input: falseReady,
 			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("ready", "True", "False", "")),
-				clusterServiceVersionObject("gpu-operator-certified.v26.7.1", "26.7.1"),
+				clusterPolicyOperandObject("v26.7.1", "v1.20.1-ubuntu20.04", "v0.20.1"),
+				clusterServiceVersionObject("gpu-operator-certified.v26.3.3", "26.3.3"),
 			},
 			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "v26.3.3",
-		},
-		{
-			name:  "missing version label blocks Ready",
-			input: falseReady,
-			objects: []client.Object{
-				clusterPolicyObject(nil, clusterPolicyStatus("ready", "True", "False", "")),
-			},
-			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: clusterPolicyVersionLabel,
-		},
-		{
-			name:  "bypass leaves true Ready true on an unsupported GPU Operator version",
-			input: trueReady,
-			objects: []client.Object{
-				clusterPolicyObject(map[string]string{clusterPolicyVersionLabel: "v26.3.3"}, clusterPolicyStatus("ready", "True", "False", "")),
-			},
-			skipVersionChecks: true,
-			expectedStatus:    metav1.ConditionTrue,
-			expectedReason:    daemonmgr.ReasonAllComponentsReady,
-			expectedMessage:   daemonmgr.MessageAllComponentsReady,
-		},
-		{
-			name:  "bypass leaves true Ready true when the version label is missing",
-			input: trueReady,
-			objects: []client.Object{
-				clusterPolicyObject(nil, clusterPolicyStatus("ready", "True", "False", "")),
-			},
-			skipVersionChecks: true,
-			expectedStatus:    metav1.ConditionTrue,
-			expectedReason:    daemonmgr.ReasonAllComponentsReady,
-			expectedMessage:   daemonmgr.MessageAllComponentsReady,
+			expectedReason:  daemonmgr.ReasonComponentNotReady,
+			expectedMessage: "not ready: FractiondReady",
 		},
 		{
 			// The bypass disables the version gates only; a ClusterPolicy that
@@ -552,6 +662,54 @@ func TestGpuDriverFailureReason(t *testing.T) {
 	}
 }
 
+func TestNormalizeOperandVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		expected   string
+		expectedOK bool
+	}{
+		{name: "plain version", version: "v1.20.1", expected: "v1.20.1", expectedOK: true},
+		{name: "without v prefix", version: "1.20.1", expected: "v1.20.1", expectedOK: true},
+		{name: "ubuntu distro suffix", version: "v1.20.1-ubuntu20.04", expected: "v1.20.1", expectedOK: true},
+		{name: "ubi distro suffix", version: "v1.20.1-ubi8", expected: "v1.20.1", expectedOK: true},
+		{name: "major minor", version: "v1.20", expected: "v1.20.0", expectedOK: true},
+		{name: "digest tag", version: "sha256-4f53cda18c2baa0c035", expectedOK: false},
+		{name: "floating tag", version: "latest", expectedOK: false},
+		{name: "empty", version: "", expectedOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := normalizeOperandVersion(tt.version)
+			if ok != tt.expectedOK {
+				t.Fatalf("ok = %t, expected %t", ok, tt.expectedOK)
+			}
+			if got != tt.expected {
+				t.Fatalf("version = %q, expected %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+// Each operand floor must be met by its own distro-suffixed tag. Compared as a
+// semver prerelease a suffix orders below the release it qualifies, so the
+// minimum supported tag would read as older than the minimum itself.
+func TestOperandFloorAcceptsItsOwnDistroSuffixedTag(t *testing.T) {
+	for _, operand := range gpuOperandRequirements {
+		t.Run(operand.name, func(t *testing.T) {
+			tag := operand.minVersion + "-ubuntu20.04"
+			version, ok := normalizeOperandVersion(tag)
+			if !ok {
+				t.Fatalf("normalizeOperandVersion(%q) failed to parse", tag)
+			}
+			if semver.Compare(version, operand.minVersion) < 0 {
+				t.Fatalf("version %q compares below the minimum %q", version, operand.minVersion)
+			}
+		})
+	}
+}
+
 func TestNormalizeGPUOperatorVersion(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -601,6 +759,28 @@ func clusterPolicyObject(labels map[string]string, status map[string]any) *unstr
 	if status != nil {
 		obj.Object["status"] = status
 	}
+	return obj
+}
+
+// clusterPolicyOperandObject builds a ready ClusterPolicy that also carries the
+// operand versions, as a Helm-installed GPU Operator records them. An empty
+// operand version is omitted, matching a ClusterPolicy that leaves it to the
+// GPU Operator's own default.
+func clusterPolicyOperandObject(operatorVersion, toolkitVersion, devicePluginVersion string) *unstructured.Unstructured {
+	obj := clusterPolicyObject(
+		map[string]string{clusterPolicyVersionLabel: operatorVersion},
+		clusterPolicyStatus("ready", "True", "False", ""),
+	)
+
+	spec := map[string]any{}
+	if toolkitVersion != "" {
+		spec["toolkit"] = map[string]any{"version": toolkitVersion}
+	}
+	if devicePluginVersion != "" {
+		spec["devicePlugin"] = map[string]any{"version": devicePluginVersion}
+	}
+	obj.Object["spec"] = spec
+
 	return obj
 }
 

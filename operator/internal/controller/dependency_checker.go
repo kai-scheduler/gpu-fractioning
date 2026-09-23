@@ -25,7 +25,11 @@ import (
 )
 
 const (
-	clusterPolicyVersionLabel   = "app.kubernetes.io/version"
+	clusterPolicyVersionLabel = "app.kubernetes.io/version"
+	// minimumGPUOperatorVersion is the floor for the GPU Operator's own version,
+	// used only where the operand versions below cannot be verified directly: no
+	// ClusterPolicy, or one that leaves an operand unset. It is the first release
+	// whose defaults satisfy both operands.
 	minimumGPUOperatorVersion   = "v26.7.1"
 	clusterPolicyReadyState     = "ready"
 	clusterPolicyReadyCondition = "Ready"
@@ -36,6 +40,31 @@ const (
 	// the MPS memory and compute limit behavior gpu-fractioning depends on.
 	minGPUDriverMajor = 615
 )
+
+// gpuOperandRequirement is a GPU Operator operand whose version
+// gpu-fractioning depends on, and where to read it from the ClusterPolicy.
+type gpuOperandRequirement struct {
+	name       string
+	specPath   []string
+	minVersion string
+}
+
+var gpuOperandRequirements = []gpuOperandRequirement{
+	{
+		// The container toolkit carries the apply-cuda-memory-limits CDI hook
+		// that applies the NVIDIA_GPU_MEMORY_REQUEST/NVIDIA_GPU_MEMORY_LIMIT
+		// values fractiond injects. On an older toolkit the limits are injected
+		// and nothing acts on them, so GPU memory goes unfenced silently.
+		name:       "container toolkit",
+		specPath:   []string{"spec", "toolkit", "version"},
+		minVersion: "v1.20.1",
+	},
+	{
+		name:       "device plugin",
+		specPath:   []string{"spec", "devicePlugin", "version"},
+		minVersion: "v0.20.1",
+	},
+}
 
 var clusterPolicyGVK = schema.GroupVersionKind{
 	Group:   "nvidia.com",
@@ -101,10 +130,18 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 	return ready, nil
 }
 
-// versionFailure evaluates the GPU Operator version gate and returns the Ready
-// condition reason and message for a version that does not meet the minimum, or
-// empty strings when it does, when no version source is present, or when the
-// gate is bypassed.
+// versionFailure evaluates the GPU stack version gates and returns the Ready
+// condition reason and message for a version that does not meet its minimum, or
+// empty strings when they do, when no version source is present, or when the
+// gates are bypassed.
+//
+// Where a ClusterPolicy exists the pinned operand versions are gated directly:
+// they are the dependency gpu-fractioning actually has. The GPU Operator version
+// is deliberately not checked against them — it is wrong in both directions,
+// rejecting an older operator whose operands were overridden onto supported
+// versions, and admitting a supported operator whose operands are pinned below
+// their floor. It is consulted only for operands the ClusterPolicy leaves unset,
+// whose effective version is the operator's own build default.
 //
 // This is the one place skipVersionChecks is honoured. Reading a version is all
 // this function does, so bypassing the gate here means no version is read at
@@ -120,9 +157,20 @@ func (c GpuOperatorDependencyChecker) versionFailure(ctx context.Context, cluste
 	}
 
 	if clusterPolicy != nil {
-		version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
-		if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
-			return daemonmgr.ReasonGPUOperatorVersionUnsupported, msg, nil
+		msg, defaulted := gpuOperandVersionFailureMessage(clusterPolicy)
+		if msg != "" {
+			return daemonmgr.ReasonGPUOperandVersionUnsupported, msg, nil
+		}
+		// An operand left off the ClusterPolicy runs the GPU Operator's own
+		// default, so the operator version is what determines it — the one case
+		// on this path where that version is evidence of anything.
+		if len(defaulted) > 0 {
+			version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
+			if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
+				return daemonmgr.ReasonGPUOperatorVersionUnsupported,
+					fmt.Sprintf("%s, and it supplies the default %s version that the ClusterPolicy leaves unset",
+						msg, strings.Join(defaulted, " and ")), nil
+			}
 		}
 		return "", "", nil
 	}
@@ -242,6 +290,10 @@ func clusterPolicyReadinessFailureMessage(clusterPolicy *unstructured.Unstructur
 	return ""
 }
 
+// gpuOperatorVersionFromClusterPolicy reads the GPU Operator's own version
+// label. It is consulted only to resolve an operand the ClusterPolicy leaves
+// unset, where the operator's build default is the effective version; a pinned
+// operand is compared directly and this label is not read.
 func gpuOperatorVersionFromClusterPolicy(clusterPolicy *unstructured.Unstructured) string {
 	return strings.TrimSpace(clusterPolicy.GetLabels()[clusterPolicyVersionLabel])
 }
@@ -271,6 +323,42 @@ func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
 	return ""
 }
 
+// gpuOperandVersionFailureMessage checks the operand versions pinned on the
+// ClusterPolicy, which is the dependency gpu-fractioning actually has, rather
+// than inferring them from the GPU Operator version.
+//
+// It also returns the operands whose version is absent. Those are not unchecked:
+// an omitted version means the GPU Operator supplies its own build's default, so
+// the operator version determines it and the caller resolves them through the
+// operator floor instead. That inference is invalid for a pinned operand — the
+// whole reason this check exists — and exactly right for a defaulted one.
+//
+// A version that is pinned but unparseable is neither. A digest names an image
+// the operator version says nothing about, and an unreadable version is not
+// evidence of an unsupported one, so it is skipped rather than blocked.
+func gpuOperandVersionFailureMessage(clusterPolicy *unstructured.Unstructured) (message string, defaulted []string) {
+	for _, operand := range gpuOperandRequirements {
+		rawVersion, _, _ := unstructured.NestedString(clusterPolicy.Object, operand.specPath...)
+		rawVersion = strings.TrimSpace(rawVersion)
+		if rawVersion == "" {
+			defaulted = append(defaulted, operand.name)
+			continue
+		}
+
+		version, ok := normalizeOperandVersion(rawVersion)
+		if !ok {
+			continue
+		}
+
+		if semver.Compare(version, operand.minVersion) < 0 {
+			return fmt.Sprintf("NVIDIA %s version %s from ClusterPolicy %s is below minimum supported version %s",
+				operand.name, rawVersion, strings.Join(operand.specPath, "."), operand.minVersion), defaulted
+		}
+	}
+
+	return "", defaulted
+}
+
 func gpuDriverFailureReason(node *corev1.Node) (reason, message string, found bool) {
 	// Use the gpu-fractioning-owned label written by mpsd during startup,
 	// not nvidia.com/cuda.driver-version.major. The GPU Operator label can be
@@ -297,6 +385,31 @@ func gpuDriverFailureReason(node *corev1.Node) (reason, message string, found bo
 	}
 
 	return "", "", false
+}
+
+// normalizeOperandVersion parses a GPU Operator operand version into a
+// comparable semver version, keeping only the major.minor.patch release core
+// and discarding any suffix.
+//
+// Operand versions are container image tags, and the container toolkit's carry
+// a distro suffix: "v1.20.1-ubuntu20.04". Those cannot be compared as semver
+// prereleases for two reasons — "04" is a numeric identifier with a leading
+// zero, which makes the whole tag invalid semver, and even where a suffix does
+// parse, semver orders a prerelease below the release it qualifies, so
+// v1.20.1-ubuntu20.04 would read as older than the v1.20.1 floor it meets.
+func normalizeOperandVersion(version string) (string, bool) {
+	core, _ := splitSemverSuffix(strings.TrimSpace(version))
+	if core == "" {
+		return "", false
+	}
+	if !strings.HasPrefix(core, "v") {
+		core = "v" + core
+	}
+
+	if !semver.IsValid(core) {
+		return "", false
+	}
+	return semver.Canonical(core), true
 }
 
 func normalizeGPUOperatorVersion(version string) (string, bool) {
