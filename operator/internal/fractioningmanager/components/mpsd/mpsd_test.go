@@ -63,6 +63,12 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	if spec.NodeSelector == nil || spec.NodeSelector["nvidia.com/gpu.present"] != "true" {
 		t.Errorf("NodeSelector = %v, want nvidia.com/gpu.present=true", spec.NodeSelector)
 	}
+	// Without the gpu-operator's third-party GPU client label, a driver upgrade
+	// never evicts mpsd and the driver unload fails while MPS holds the module.
+	if spec.NodeSelector[daemonmgr.GPUDeployClientLabel] != daemonmgr.GPUDeployClientValue {
+		t.Errorf("NodeSelector[%s] = %q, want %q",
+			daemonmgr.GPUDeployClientLabel, spec.NodeSelector[daemonmgr.GPUDeployClientLabel], daemonmgr.GPUDeployClientValue)
+	}
 
 	// Container
 	if len(spec.Containers) != 1 {

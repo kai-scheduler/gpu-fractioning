@@ -70,7 +70,7 @@ func (d *daemon) Name() string { return daemonName }
 func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 	result := daemonmgr.BaseDaemonSet(daemonName, opts.Namespace)
 
-	result.Spec.Template.Spec.NodeSelector = opts.NodeSelector
+	result.Spec.Template.Spec.NodeSelector = daemonmgr.DaemonNodeSelector(opts.NodeSelector)
 	result.Spec.Template.Spec.ServiceAccountName = opts.ServiceAccountName
 	result.Spec.Template.Spec.RuntimeClassName = opts.RuntimeClassName
 	// HostPID is required for memacct to enforce GPU memory limits. The control
