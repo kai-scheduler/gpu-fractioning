@@ -51,13 +51,17 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /out/metricsd ./cmd
 
-# NVIDIA-approved distroless base pulled from NGC (OSRB requires an approved
-# NVIDIA base container; gcr.io/distroless is not one). This variant ships
-# glibc — including libdl/libpthread — which metricsd needs because it is built
-# CGO_ENABLED=1 and the NVML bindings dlopen libnvidia-ml.so at runtime; the
-# driver itself is injected by the NVIDIA container runtime. No OS packages are
-# added on top of the base.
-FROM nvcr.io/nvidia/distroless/go:v4.1.4
+# UBI9 base, pulled from NGC. Adds no OS packages; only the metricsd binary.
+#
+# metricsd needs a glibc and dynamic loader: it is built CGO_ENABLED=1 and the
+# NVML bindings dlopen libnvidia-ml.so at runtime, which the NVIDIA container
+# runtime injects from the host driver.
+#
+# It does not need CUDA — the base is CUDA only because NGC publishes no plain
+# UBI9 image. Kept on the same tag as mpsd so the layers are pulled once on a
+# GPU node, where metricsd (a sidecar in the fractiond DaemonSet) and mpsd are
+# always co-resident.
+FROM nvcr.io/nvidia/cuda:13.3.1-base-ubi9
 
 # Root, because reading per-process GPU state through NVML requires it. The base
 # image defaults to its non-root `nvs` user, so this has to be explicit.

@@ -31,14 +31,16 @@ COPY operator/internal/  operator/internal/
 
 RUN cd operator && GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o manager cmd/main.go
 
-# NVIDIA-approved distroless base pulled from NGC (OSRB requires an approved
-# NVIDIA base container; gcr.io/distroless is not one). Adds no OS packages of
-# our own — the image is the base plus the static manager binary.
-FROM nvcr.io/nvidia/distroless/go:v4.1.4
+# The manager is CGO_ENABLED=0 and fully static, so it needs no base userspace.
+FROM scratch
+# Nothing reads this today — the in-cluster client uses the service account CA
+# bundle — so it is here to keep future outbound TLS failing on an untrusted
+# cert rather than on a missing root store.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 WORKDIR /
 COPY --from=builder /workspace/operator/manager .
 # Attribution for the third-party code statically linked into the binary.
 COPY THIRD-PARTY.txt /THIRD-PARTY.txt
-# 1000 is the base image's `nvs` user; the chart requires runAsNonRoot.
+# Must stay numeric: the chart sets runAsNonRoot and scratch has no /etc/passwd.
 USER 1000:1000
 ENTRYPOINT ["/manager"]

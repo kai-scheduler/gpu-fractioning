@@ -29,15 +29,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     GOFIPS140=${GOFIPS140} CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -trimpath -ldflags="-s -w" -o /mpsd ./fractioning-manager/mpsd/cmd
 
-# Runtime stage — nvidia/cuda base provides nvidia-cuda-mps-control which mpsd
-# needs to exec. The NVIDIA container runtime only injects device access, not
-# the MPS control binary itself.
+# Runtime stage — UBI9 base, pulled from NGC. Adds no OS packages; only the
+# mpsd binary.
 #
-# This is an OSRB-approved NVIDIA base container (the public NVIDIA CUDA images
-# on Docker Hub are explicitly exempt from the "must be pulled from an NVIDIA
-# managed repository" rule). No `apt install` layer is added on top of it, so
-# this image adds no OS packages — only the mpsd binary.
-FROM nvidia/cuda:13.3.1-base-ubuntu24.04
+# mpsd needs two things from it: glibc, because it is built CGO_ENABLED=1 and
+# the NVML bindings dlopen libnvidia-ml.so at runtime, and /usr/bin/test, which
+# the readiness and liveness probes exec against the MPS control socket.
+#
+# It does NOT need the base for nvidia-cuda-mps-control. No nvidia/cuda image
+# ships that binary; the NVIDIA container runtime injects it from the host
+# driver because this container requests NVIDIA_DRIVER_CAPABILITIES=compute.
+# The base is CUDA only because NGC publishes no plain UBI9 image.
+FROM nvcr.io/nvidia/cuda:13.3.1-base-ubi9
 
 COPY --from=builder /mpsd /usr/local/bin/mpsd
 # Attribution for the third-party code statically linked into the binary.

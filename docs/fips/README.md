@@ -27,6 +27,19 @@ If a requirement calls for a fully validated container filesystem — a validate
 OpenSSL, a FIPS-mode host kernel — that is a materially larger piece of work and
 is not what these images provide.
 
+### Base images
+
+`operator` and `fractiond` are `CGO_ENABLED=0` and ship on `scratch`, carrying
+only the binary, its attribution and a CA bundle. There is no OS crypto in those
+images because there is no OS.
+
+`metricsd` and `mpsd` are `CGO_ENABLED=1` — the NVML bindings dlopen
+`libnvidia-ml.so` — so they cannot be static and need a glibc. They ship on
+`nvcr.io/nvidia/cuda:13.3.1-base-ubi9`, whose glibc and OpenSSL are FIPS 140-3
+validated Red Hat modules. Neither binary calls into them for crypto; that still
+comes from the Go module linked above, so this does not widen the claim made
+here.
+
 ## The three modes
 
 The chart value is `global.fipsMode`, and it accepts exactly three values:
