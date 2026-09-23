@@ -4,7 +4,7 @@
 name: Push Artifacts
 
 # Publishes the four component images and the Helm chart to
-# ghcr.io/kai-scheduler/kai-gpu-fractioning.
+# ghcr.io/kai-scheduler/gpu-fractioning.
 #
 #   * push to main        → dev artifacts, single-arch (amd64), version 0.0.0-<short-sha>.
 #   * workflow_call(v...)  → release artifacts, multi-arch (amd64+arm64), version = tag,
@@ -43,7 +43,11 @@ permissions:
 
 env:
   GOWORK: "off"
-  DOCKER_REPO_BASE: ghcr.io/kai-scheduler/kai-gpu-fractioning
+  DOCKER_REPO_BASE: ghcr.io/kai-scheduler/gpu-fractioning
+  # helm push appends the chart name to the namespace it is given, so pushing to
+  # the org namespace lands the chart at ghcr.io/kai-scheduler/gpu-fractioning —
+  # the same path the component images hang off as ghcr.io/.../gpu-fractioning/*.
+  CHART_REPO_NAMESPACE: ghcr.io/kai-scheduler
 
 jobs:
   push-artifacts:
@@ -72,11 +76,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ steps.setup.outputs.version }}"
-          # The chart's image repositories already point at ghcr.io/kai-scheduler/kai-gpu-fractioning/*
+          # The chart's image repositories already point at ghcr.io/kai-scheduler/gpu-fractioning/*
           # and image tags default to .Chart.AppVersion, so no values rewrite is needed —
           # packaging with --app-version pins every daemon image to this version.
           helm package operator/charts --version "$VERSION" --app-version "$VERSION" -d ./dist
-          helm push "./dist/gpu-fractioning-$VERSION.tgz" "oci://${DOCKER_REPO_BASE}"
+          helm push "./dist/gpu-fractioning-$VERSION.tgz" "oci://${CHART_REPO_NAMESPACE}"
 
   # FIPS variants are built whenever a version is supplied, which means releases
   # and manual runs but not pushes to main. Doubling every image build on each

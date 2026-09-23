@@ -8,7 +8,7 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
 // newAdapter returns an adapter configured with the default GPU-memory prefix,

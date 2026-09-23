@@ -9,8 +9,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/nvmlmock"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/nvmlmock"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // TestE2E_MultiProcessPerPodAggregation verifies that when several GPU

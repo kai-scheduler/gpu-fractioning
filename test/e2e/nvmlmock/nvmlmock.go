@@ -33,8 +33,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/pods"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/pods"
 )
 
 //go:embed config.yaml.tmpl

@@ -21,7 +21,7 @@ package events
 import (
 	"log/slog"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
 
 // defaultQueueDepth buffers events so the producer rarely hits the drop path.

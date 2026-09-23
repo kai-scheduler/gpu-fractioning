@@ -31,19 +31,19 @@ leaderElect: true
 
 images:
   operator:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/operator
     tag: ""
     pullPolicy: IfNotPresent
   fractiond:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/fractiond
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/fractiond
     tag: ""
     pullPolicy: IfNotPresent
   metricsd:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/metricsd
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/metricsd
     tag: ""
     pullPolicy: IfNotPresent
   mpsd:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/mpsd
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/mpsd
     tag: ""
     pullPolicy: IfNotPresent
 

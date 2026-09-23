@@ -16,9 +16,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/fsstore"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
 )
 
 var (

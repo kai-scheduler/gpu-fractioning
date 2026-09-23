@@ -6,9 +6,9 @@ package internal
 import (
 	"log/slog"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/gpudevices"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/gpudevices"
 
 	"github.com/containerd/nri/pkg/api"
 )

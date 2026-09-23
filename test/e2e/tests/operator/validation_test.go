@@ -12,10 +12,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/harness"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/daemonset"
-	gsc "github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/harness"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/daemonset"
+	gsc "github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
 )
 
 // RejectsNonDefaultCRName — only a CR named "default" is accepted (CRD

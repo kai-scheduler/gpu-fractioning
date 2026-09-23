@@ -14,10 +14,10 @@ import (
 
 	"github.com/containerd/nri/pkg/stub"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/audit"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
 )
 
 func main() {

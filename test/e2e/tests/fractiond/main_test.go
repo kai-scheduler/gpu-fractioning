@@ -28,7 +28,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/harness"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/harness"
 )
 
 // h is the shared harness (one cluster connection + FX-STEADY snapshot), set in

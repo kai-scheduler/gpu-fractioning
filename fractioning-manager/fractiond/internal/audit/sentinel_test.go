@@ -9,7 +9,7 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 )
 
 func newSentinel(stopper ContainerStopper) *Sentinel {

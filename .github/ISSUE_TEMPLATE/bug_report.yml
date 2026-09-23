@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: Bug report
-description: Report a reproducible problem in kai-gpu-fractioning
+description: Report a reproducible problem in gpu-fractioning
 title: "[Bug]: "
 labels:
   - kind/bug
@@ -11,8 +11,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thank you for helping improve kai-gpu-fractioning.
-        Do not report security vulnerabilities here; follow [SECURITY.md](https://github.com/kai-scheduler/kai-gpu-fractioning/blob/main/SECURITY.md) instead.
+        Thank you for helping improve gpu-fractioning.
+        Do not report security vulnerabilities here; follow [SECURITY.md](https://github.com/kai-scheduler/gpu-fractioning/blob/main/SECURITY.md) instead.
 
   - type: dropdown
     id: component

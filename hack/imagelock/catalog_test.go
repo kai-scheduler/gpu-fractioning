@@ -13,9 +13,9 @@ import (
 func validCatalog() imageCatalog {
 	return imageCatalog{
 		APIVersion:   catalogAPIVersion,
-		Name:         "kai-gpu-fractioning",
+		Name:         "gpu-fractioning",
 		ArtifactName: "gpu-fractioning",
-		Repository:   "ghcr.io/kai-scheduler/kai-gpu-fractioning",
+		Repository:   "ghcr.io/kai-scheduler/gpu-fractioning",
 		Images: []catalogImage{
 			{Name: "operator"},
 			{Name: "fractiond"},
@@ -127,13 +127,13 @@ func TestValidateChartValuesMatchesCatalog(t *testing.T) {
 	valid := `
 images:
   operator:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/operator
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/operator
   fractiond:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/fractiond
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/fractiond
   metricsd:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/metricsd
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/metricsd
   mpsd:
-    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/mpsd
+    repository: ghcr.io/kai-scheduler/gpu-fractioning/mpsd
 `
 	tests := []struct {
 		name     string
@@ -141,9 +141,9 @@ images:
 		wantErr  string
 	}{
 		{name: "matching values", contents: valid},
-		{name: "missing image", contents: strings.Replace(valid, "  mpsd:\n    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/mpsd\n", "", 1), wantErr: "do not match build images"},
-		{name: "extra image", contents: valid + "  whateverd:\n    repository: ghcr.io/kai-scheduler/kai-gpu-fractioning/whateverd\n", wantErr: "do not match build images"},
-		{name: "renamed repository", contents: strings.Replace(valid, "kai-gpu-fractioning/mpsd", "kai-gpu-fractioning/renamed-mpsd", 1), wantErr: `image "mpsd" repository`},
+		{name: "missing image", contents: strings.Replace(valid, "  mpsd:\n    repository: ghcr.io/kai-scheduler/gpu-fractioning/mpsd\n", "", 1), wantErr: "do not match build images"},
+		{name: "extra image", contents: valid + "  whateverd:\n    repository: ghcr.io/kai-scheduler/gpu-fractioning/whateverd\n", wantErr: "do not match build images"},
+		{name: "renamed repository", contents: strings.Replace(valid, "gpu-fractioning/mpsd", "gpu-fractioning/renamed-mpsd", 1), wantErr: `image "mpsd" repository`},
 		{name: "malformed values", contents: "images: [unterminated", wantErr: "parse chart values"},
 	}
 	for _, test := range tests {
@@ -262,9 +262,9 @@ func TestLoadCatalogRejectsUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "catalog.yaml")
 	contents := []byte(`
 apiVersion: imagelock.kai-scheduler.io/v1alpha1
-name: kai-gpu-fractioning
+name: gpu-fractioning
 artifactName: gpu-fractioning
-repository: ghcr.io/kai-scheduler/kai-gpu-fractioning
+repository: ghcr.io/kai-scheduler/gpu-fractioning
 images: [{name: operator}]
 profiles: [{name: standard, tagTemplate: "{{version}}"}]
 platforms: [{os: linux, architecture: amd64}]

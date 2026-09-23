@@ -4,8 +4,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions and support
-    url: https://github.com/kai-scheduler/kai-gpu-fractioning/discussions
+    url: https://github.com/kai-scheduler/gpu-fractioning/discussions
     about: Ask usage and support questions in GitHub Discussions.
   - name: Report a security vulnerability
-    url: https://github.com/kai-scheduler/kai-gpu-fractioning/security/policy
+    url: https://github.com/kai-scheduler/gpu-fractioning/security/policy
     about: Review the private reporting options in SECURITY.md; do not open a public issue.

@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/metrics"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/nvmlmock"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/metrics"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/nvmlmock"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // TestE2E_NormalizedSMUtilIsCapped verifies that

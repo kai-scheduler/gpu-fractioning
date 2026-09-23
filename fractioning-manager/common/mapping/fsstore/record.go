@@ -15,7 +15,7 @@ package fsstore
 import (
 	"strings"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
 
 // DefaultMapDir is the shared-volume directory for the container->pod mapping

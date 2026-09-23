@@ -18,7 +18,7 @@
 apiVersion: skaffold/v4beta11
 kind: Config
 metadata:
-  name: kai-gpu-fractioning
+  name: gpu-fractioning
 
 build:
   # push:false (default profile) keeps images local; Skaffold auto-loads them

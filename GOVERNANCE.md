@@ -1,10 +1,10 @@
 # Governance
 
-This document is the governance model for **kai-gpu-fractioning**. It describes who decides what
+This document is the governance model for **gpu-fractioning**. It describes who decides what
 in this repository, how those decisions are made, and how the people who make them change over
 time.
 
-kai-gpu-fractioning is hosted in the `kai-scheduler` GitHub organization, which belongs to the
+gpu-fractioning is hosted in the `kai-scheduler` GitHub organization, which belongs to the
 KAI Scheduler [Cloud Native Computing Foundation](https://cncf.io) sandbox project. That means
 the [CNCF Charter](https://github.com/cncf/foundation/blob/main/charter.md) section 11 IP policy
 binds this repository: code is licensed under the Apache License 2.0, documentation under the
@@ -16,7 +16,7 @@ below is.
 
 ### Maintainers
 
-Maintainers are responsible for the long-term health of kai-gpu-fractioning. They are listed in
+Maintainers are responsible for the long-term health of gpu-fractioning. They are listed in
 [MAINTAINERS.md](MAINTAINERS.md), and that list drives review and merge permissions through
 [OWNERS](OWNERS) and [CODEOWNERS](CODEOWNERS).
 
@@ -57,11 +57,11 @@ request or issue where the change is proposed.
 
 ### Changes that cross into KAI Scheduler
 
-kai-gpu-fractioning enforces on the node the GPU fractions that KAI Scheduler assigns. The two
+gpu-fractioning enforces on the node the GPU fractions that KAI Scheduler assigns. The two
 projects therefore share an interface: the pod annotations KAI Scheduler writes and this project
 consumes. Changes to that interface are agreed jointly with the
 [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler) maintainers before either side
-ships them. This is a technical dependency, not a reporting line — kai-gpu-fractioning is
+ships them. This is a technical dependency, not a reporting line — gpu-fractioning is
 governed by the maintainers listed here.
 
 ## Changing the maintainer group

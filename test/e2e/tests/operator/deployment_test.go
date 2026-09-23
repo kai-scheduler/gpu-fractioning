@@ -13,10 +13,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/harness"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/daemonset"
-	gsc "github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/nodes"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/harness"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/daemonset"
+	gsc "github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/nodes"
 )
 
 // stabilityWindow is how long the "stable" cases (ReconcileIdempotent,

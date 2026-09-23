@@ -19,9 +19,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/operator/internal/common/daemonmgr"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/driverinfo"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
 )
 
 func TestGpuOperatorDependencyChecker(t *testing.T) {

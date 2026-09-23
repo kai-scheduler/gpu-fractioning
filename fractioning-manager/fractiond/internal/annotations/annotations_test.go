@@ -6,7 +6,7 @@ package annotations
 import (
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 )
 
 func TestParseToMemoryMiB(t *testing.T) {

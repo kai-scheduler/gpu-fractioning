@@ -7,9 +7,9 @@ import (
 	"flag"
 	"time"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/configuration"
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/mpsd/internal"
-	"github.com/kai-scheduler/kai-gpu-fractioning/pkg/env"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
 
 type cliFlags struct {

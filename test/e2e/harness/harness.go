@@ -21,12 +21,12 @@ import (
 	"context"
 	"time"
 
-	v1alpha1 "github.com/kai-scheduler/kai-gpu-fractioning/api/v1alpha1"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
+	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
 	// Import for its init(): registers the GpuFractioningConfig types into the
 	// scheme the shared cluster client uses, so typed CR access works.
-	_ "github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/suite"
+	_ "github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/gpufractioningconfig"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/suite"
 )
 
 // Harness is the shared state for a run of an e2e suite. It only connects to an

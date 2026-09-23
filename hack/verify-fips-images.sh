@@ -12,7 +12,7 @@
 # check below instead of being skipped. Only the in-image binary paths live
 # here, since nothing else knows them.
 #
-#   hack/verify-fips-images.sh --repo ghcr.io/kai-scheduler/kai-gpu-fractioning \
+#   hack/verify-fips-images.sh --repo ghcr.io/kai-scheduler/gpu-fractioning \
 #     --tag v0.1.0-fips --module v1.0.0 --platforms linux/amd64,linux/arm64
 
 set -euo pipefail

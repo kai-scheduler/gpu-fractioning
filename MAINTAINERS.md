@@ -1,6 +1,6 @@
 # Maintainers
 
-These are the maintainers of **kai-gpu-fractioning** — the people who review and merge changes
+These are the maintainers of **gpu-fractioning** — the people who review and merge changes
 here, own its releases, and decide its direction. See [GOVERNANCE.md](GOVERNANCE.md) for what that
 entails and how this list changes.
 
@@ -18,6 +18,6 @@ The same list drives review and merge permissions through [OWNERS](OWNERS) and
 
 ## Contacting the maintainers
 
-- Public questions and bug reports: [GitHub issues](https://github.com/kai-scheduler/kai-gpu-fractioning/issues).
+- Public questions and bug reports: [GitHub issues](https://github.com/kai-scheduler/gpu-fractioning/issues).
 - Security vulnerabilities: **do not open an issue** — use the private channels in [SECURITY.md](SECURITY.md).
 - Anything else: the `#kai-scheduler` channel on the [CNCF Slack](https://slack.cncf.io).

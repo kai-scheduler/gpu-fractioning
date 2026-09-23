@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
 )
 
 // The plugin depends on the ReadinessSetter interface; readiness.State is the

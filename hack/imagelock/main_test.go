@@ -184,7 +184,7 @@ func TestBuildLockSelectsProfileAndPlatform(t *testing.T) {
 	amd64 := platform{OS: "linux", Architecture: "amd64"}
 	indexDigest := "sha256:" + strings.Repeat("a", 64)
 	childDigest := "sha256:" + strings.Repeat("b", 64)
-	repository := "ghcr.io/kai-scheduler/kai-gpu-fractioning/operator"
+	repository := "ghcr.io/kai-scheduler/gpu-fractioning/operator"
 	resolved := []resolvedImage{
 		{
 			profile:           "standard",
@@ -200,11 +200,11 @@ func TestBuildLockSelectsProfileAndPlatform(t *testing.T) {
 		},
 	}
 
-	lock, err := buildLock("kai-gpu-fractioning", "v1.2.3", lockTarget{profile: "standard", platform: amd64}, resolved)
+	lock, err := buildLock("gpu-fractioning", "v1.2.3", lockTarget{profile: "standard", platform: amd64}, resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lock.Metadata.Name != "kai-gpu-fractioning" || lock.Metadata.Version != "v1.2.3" || lock.Spec.Profile != "standard" {
+	if lock.Metadata.Name != "gpu-fractioning" || lock.Metadata.Version != "v1.2.3" || lock.Spec.Profile != "standard" {
 		t.Fatalf("lock metadata/profile = %+v/%q", lock.Metadata, lock.Spec.Profile)
 	}
 	if len(lock.Spec.Images) != 1 {

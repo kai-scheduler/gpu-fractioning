@@ -9,7 +9,7 @@
 package gpudevices
 
 import (
-	"github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 
 	"github.com/containerd/nri/pkg/api"
 )

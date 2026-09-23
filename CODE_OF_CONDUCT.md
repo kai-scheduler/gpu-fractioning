@@ -1,6 +1,6 @@
 # Code of Conduct
 
-kai-gpu-fractioning has adopted the
+gpu-fractioning has adopted the
 [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md). The text
 below is that Code of Conduct as adopted here; where the two differ, the CNCF Code of Conduct
 governs.

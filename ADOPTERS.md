@@ -1,22 +1,22 @@
 # Adopters
 
-This document lists organizations that have adopted kai-gpu-fractioning — either to share GPUs
+This document lists organizations that have adopted gpu-fractioning — either to share GPUs
 across their own Kubernetes workloads, or to integrate it into the products and services they
 offer.
 
-If your organization is using kai-gpu-fractioning, we would love to have you listed here. See
+If your organization is using gpu-fractioning, we would love to have you listed here. See
 [Add your organization](#add-your-organization) below.
 
 ## Adoption phases
 
-- **Evaluation** — evaluating kai-gpu-fractioning against infrastructure and feature requirements.
+- **Evaluation** — evaluating gpu-fractioning against infrastructure and feature requirements.
 - **Staging** — adopted; rolling out in pre-production or staging environments.
-- **Production** — running kai-gpu-fractioning in production.
+- **Production** — running gpu-fractioning in production.
 
 ## Organization types
 
-- **End user** — uses kai-gpu-fractioning to manage internal workloads or services.
-- **Platform / provider** — integrates kai-gpu-fractioning into a product, managed service or
+- **End user** — uses gpu-fractioning to manage internal workloads or services.
+- **Platform / provider** — integrates gpu-fractioning into a product, managed service or
   platform offered to customers.
 
 ## Adopters

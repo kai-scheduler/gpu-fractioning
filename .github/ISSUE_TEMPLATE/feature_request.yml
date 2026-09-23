@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 name: Feature request
-description: Propose an enhancement to kai-gpu-fractioning
+description: Propose an enhancement to gpu-fractioning
 title: "[Feature]: "
 labels:
   - kind/feature
@@ -11,7 +11,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Describe the user problem before proposing a solution. Questions belong in [GitHub Discussions](https://github.com/kai-scheduler/kai-gpu-fractioning/discussions).
+        Describe the user problem before proposing a solution. Questions belong in [GitHub Discussions](https://github.com/kai-scheduler/gpu-fractioning/discussions).
 
   - type: dropdown
     id: component

@@ -1,11 +1,11 @@
-module github.com/kai-scheduler/kai-gpu-fractioning/fractioning-manager/metricsd
+module github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd
 
 go 1.26.4
 
 require (
 	github.com/NVIDIA/go-nvml v0.13.3-1
-	github.com/kai-scheduler/kai-gpu-fractioning v0.0.0
-	github.com/kai-scheduler/kai-gpu-fractioning/pkg v0.0.0
+	github.com/kai-scheduler/gpu-fractioning v0.0.0
+	github.com/kai-scheduler/gpu-fractioning/pkg v0.0.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 )
@@ -21,6 +21,6 @@ require (
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 )
 
-replace github.com/kai-scheduler/kai-gpu-fractioning => ../../
+replace github.com/kai-scheduler/gpu-fractioning => ../../
 
-replace github.com/kai-scheduler/kai-gpu-fractioning/pkg => ../../pkg
+replace github.com/kai-scheduler/gpu-fractioning/pkg => ../../pkg

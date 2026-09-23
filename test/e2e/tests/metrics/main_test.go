@@ -27,7 +27,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/suite"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/suite"
 )
 
 var s *suite.Suite

@@ -1,4 +1,4 @@
-module github.com/kai-scheduler/kai-gpu-fractioning/api
+module github.com/kai-scheduler/gpu-fractioning/api
 
 go 1.26.4
 

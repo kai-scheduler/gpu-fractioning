@@ -13,10 +13,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/harness"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/daemonset"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/waiter"
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/workload"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/harness"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/daemonset"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/workload"
 )
 
 // containerMpsd is the mpsd DaemonSet's container name, needed by the sm-sharing

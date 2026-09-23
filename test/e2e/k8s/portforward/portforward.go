@@ -12,7 +12,7 @@ import (
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 
-	"github.com/kai-scheduler/kai-gpu-fractioning/test/e2e/k8s/cluster"
+	"github.com/kai-scheduler/gpu-fractioning/test/e2e/k8s/cluster"
 )
 
 // Forwarder holds an active port-forward to a pod. Close must be called to

@@ -53,7 +53,7 @@ make -C fractioning-manager/metricsd build BIN_DIR=../bin
 
 ## Image
 
-The default image is `ghcr.io/kai-scheduler/kai-gpu-fractioning/metricsd:dev`.
+The default image is `ghcr.io/kai-scheduler/gpu-fractioning/metricsd:dev`.
 
 Build the image from the repository root:
 
