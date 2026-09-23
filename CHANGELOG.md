@@ -63,6 +63,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   or libraries loaded from the host driver stack.
 
 ### Changed
+- All four images move to new base images. `operator` and `fractiond` move from
+  `nvcr.io/nvidia/distroless/go:v4.1.4` to `scratch`: both are `CGO_ENABLED=0`
+  and fully static, so each image is now just the binary, its attribution and a
+  CA bundle. `metricsd` (from the same distroless image) and `mpsd` (from the
+  Docker Hub `nvidia/cuda:13.3.1-base-ubuntu24.04`) move to
+  `nvcr.io/nvidia/cuda:13.3.1-base-ubi9`, whose glibc and OpenSSL are FIPS 140-3
+  validated Red Hat modules; both are `CGO_ENABLED=1` and dlopen
+  `libnvidia-ml.so`, so neither can be static. No image adds OS packages, mpsd's
+  CUDA version is unchanged, and `operator` keeps `USER 1000:1000` — numeric,
+  because `scratch` has no `/etc/passwd` for the chart's `runAsNonRoot`. FIPS
+  behaviour is unchanged: it comes from `GOFIPS140` linking the validated Go
+  Cryptographic Module into each binary, independent of the base image.
+- Corrected the documented reason for mpsd using a CUDA base. The Dockerfile
+  said the base supplies `nvidia-cuda-mps-control`; no `nvidia/cuda` image ships
+  that binary. The NVIDIA container runtime injects it from the host driver
+  because the container requests `NVIDIA_DRIVER_CAPABILITIES=compute,utility`.
+  mpsd needs the base for glibc and for `/usr/bin/test`, which its readiness and
+  liveness probes exec against the MPS control socket.
 - All four images now build from an NVIDIA-approved base container. `operator`,
   `fractiond` and `metricsd` move from `gcr.io/distroless/*` to
   `nvcr.io/nvidia/distroless/go:v4.0.8`; `mpsd` stays on the approved public

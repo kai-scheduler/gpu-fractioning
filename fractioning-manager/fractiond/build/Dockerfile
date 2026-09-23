@@ -16,16 +16,18 @@ RUN go mod download
 COPY fractioning-manager/ fractioning-manager/
 RUN GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o fractiond ./fractioning-manager/fractiond/cmd
 
-# NVIDIA-approved distroless base pulled from NGC (OSRB requires an approved
-# NVIDIA base container; gcr.io/distroless is not one). fractiond is a
-# statically-linked Go binary with no GPU or OS-level dependencies — it only
-# communicates via the NRI Unix socket — so nothing from the base is needed
-# beyond a filesystem to run in, and no OS packages are added.
-FROM nvcr.io/nvidia/distroless/go:v4.1.4
+# fractiond is CGO_ENABLED=0 and fully static, with no GPU or OS-level
+# dependencies — it only talks over the NRI Unix socket and serves /readyz — so
+# it needs no base userspace.
+FROM scratch
+# Nothing reads this today: fractiond makes no outbound TLS connections. It is
+# here to keep any future one failing on an untrusted cert rather than on a
+# missing root store.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /workspace/fractiond /fractiond
 # Attribution for the third-party code statically linked into the binary.
 COPY THIRD-PARTY.txt /THIRD-PARTY.txt
-# Root, because the NRI socket fractiond connects to is root-owned. The base
-# image defaults to its non-root `nvs` user, so this has to be explicit.
+# Root, because the NRI socket fractiond connects to is root-owned. Explicit
+# rather than inherited from scratch's default.
 USER 0:0
 ENTRYPOINT ["/fractiond"]
