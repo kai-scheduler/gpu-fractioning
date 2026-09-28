@@ -41,7 +41,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ships that binary; the NVIDIA container runtime injects it from the host
 # driver because this container requests NVIDIA_DRIVER_CAPABILITIES=compute.
 # The base is CUDA only because NGC publishes no plain UBI9 image.
-FROM nvcr.io/nvidia/cuda:13.3.1-base-ubi9
+FROM nvcr.io/nvidia/cuda:13.4.1-base-ubi9
 
 # Base-image hardening, byte-identical to the metricsd runtime stage — change
 # one, change the other. Unused tooling is removed rather than patched, and

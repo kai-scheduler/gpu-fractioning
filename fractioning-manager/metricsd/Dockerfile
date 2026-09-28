@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # UBI9 image. Kept on the same tag as mpsd so the layers are pulled once on a
 # GPU node, where metricsd (a sidecar in the fractiond DaemonSet) and mpsd are
 # always co-resident.
-FROM nvcr.io/nvidia/cuda:13.3.1-base-ubi9
+FROM nvcr.io/nvidia/cuda:13.4.1-base-ubi9
 
 # Base-image hardening, byte-identical to the mpsd runtime stage — change
 # one, change the other. Unused tooling is removed rather than patched, and
