@@ -143,10 +143,10 @@ github.com/go-logr/zapr
     License:      LICENSE [text b40930bbcf80]
 
 github.com/go-openapi/jsonpointer
-    Version:      v0.21.0
+    Version:      v1.0.0
     Source:       https://github.com/go-openapi/jsonpointer
     Linked into:  mpsd, operator
-    License:      LICENSE [text cfc7749b96f6]
+    License:      LICENSE [text c71d239df917], NOTICE [text 05b8a1ce6ce5]
 
 github.com/go-openapi/jsonreference
     Version:      v0.20.2
@@ -154,8 +154,74 @@ github.com/go-openapi/jsonreference
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
+github.com/go-openapi/swag/cmdutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/cmdutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/conv
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/conv
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/fileutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/fileutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/jsonutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/jsonutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/loading
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/loading
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/mangling
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/mangling
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/netutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/netutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/pools
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/pools
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/stringutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/stringutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/typeutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/typeutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
+github.com/go-openapi/swag/yamlutils
+    Version:      v0.27.1
+    Source:       https://github.com/go-openapi/swag/yamlutils
+    Linked into:  mpsd, operator
+    License:      LICENSE [text cfc7749b96f6]
+
 github.com/go-openapi/swag
-    Version:      v0.23.0
+    Version:      v0.27.1
     Source:       https://github.com/go-openapi/swag
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
@@ -184,12 +250,6 @@ github.com/grpc-ecosystem/grpc-gateway/v2
     Linked into:  operator
     License:      LICENSE [text a15b1d1b1689]
 
-github.com/josharian/intern
-    Version:      v1.0.0
-    Source:       https://github.com/josharian/intern
-    Linked into:  mpsd, operator
-    License:      license.md [text ad754e4f7d16]
-
 github.com/json-iterator/go
     Version:      v1.1.12
     Source:       https://github.com/json-iterator/go
@@ -201,12 +261,6 @@ github.com/knqyf263/go-plugin
     Source:       https://github.com/knqyf263/go-plugin
     Linked into:  fractiond
     License:      LICENSE [text 089ed381a9f6]
-
-github.com/mailru/easyjson
-    Version:      v0.7.7
-    Source:       https://github.com/mailru/easyjson
-    Linked into:  mpsd, operator
-    License:      LICENSE [text 87baa92c3100]
 
 github.com/modern-go/concurrent
     Version:      v0.0.0-20180306012644-bacd9c7ef1dd
@@ -466,12 +520,6 @@ gopkg.in/inf.v0
     Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text 050855d9ceed]
 
-gopkg.in/yaml.v3
-    Version:      v3.0.1
-    Source:       https://github.com/go-yaml/yaml
-    Linked into:  mpsd, operator
-    License:      LICENSE [text d18f6323b71b], NOTICE [text f6c2dd3a67b5]
-
 k8s.io/api
     Version:      v0.36.3
     Source:       https://github.com/kubernetes/api
@@ -585,9 +633,19 @@ Each distinct license text is reproduced once and referenced above by its
 text cfc7749b96f6 — applies to:
     cel.dev/expr@v0.25.2 (LICENSE)
     github.com/NVIDIA/go-nvml@v0.13.3-1 (LICENSE)
-    github.com/go-openapi/jsonpointer@v0.21.0 (LICENSE)
     github.com/go-openapi/jsonreference@v0.20.2 (LICENSE)
-    github.com/go-openapi/swag@v0.23.0 (LICENSE)
+    github.com/go-openapi/swag/cmdutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/conv@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/fileutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/jsonutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/loading@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/mangling@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/netutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/pools@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/stringutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/typeutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag/yamlutils@v0.27.1 (LICENSE)
+    github.com/go-openapi/swag@v0.27.1 (LICENSE)
     google.golang.org/genproto/googleapis/api@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
     google.golang.org/genproto/googleapis/rpc@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
     google.golang.org/grpc@v1.83.2 (LICENSE)
@@ -810,6 +868,7 @@ text c71d239df917 — applies to:
     github.com/containerd/nri@v0.12.1 (LICENSE)
     github.com/containerd/ttrpc@v1.2.7 (LICENSE)
     github.com/go-logr/stdr@v1.2.2 (LICENSE)
+    github.com/go-openapi/jsonpointer@v1.0.0 (LICENSE)
     github.com/modern-go/concurrent@v0.0.0-20180306012644-bacd9c7ef1dd (LICENSE)
     github.com/modern-go/reflect2@v1.0.3-0.20250322232337-35a7c28c31ee (LICENSE)
     github.com/prometheus/client_golang@v1.24.1 (LICENSE)
@@ -1520,27 +1579,6 @@ text b40930bbcf80 — applies to:
    limitations under the License.
 
 ------------------------------------------------------------------------------
-text f6c2dd3a67b5 — applies to:
-    go.yaml.in/yaml/v2@v2.4.4 (NOTICE)
-    go.yaml.in/yaml/v3@v3.0.4 (NOTICE)
-    gopkg.in/yaml.v3@v3.0.1 (NOTICE)
-------------------------------------------------------------------------------
-
-Copyright 2011-2016 Canonical Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-------------------------------------------------------------------------------
 text 9cb8ce7ebecf — applies to:
     github.com/evanphx/json-patch/v5@v5.9.11 (LICENSE)
     gopkg.in/evanphx/json-patch.v4@v4.13.0 (LICENSE)
@@ -1573,49 +1611,12 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-text d18f6323b71b — applies to:
-    go.yaml.in/yaml/v3@v3.0.4 (LICENSE)
-    gopkg.in/yaml.v3@v3.0.1 (LICENSE)
+text f6c2dd3a67b5 — applies to:
+    go.yaml.in/yaml/v2@v2.4.4 (NOTICE)
+    go.yaml.in/yaml/v3@v3.0.4 (NOTICE)
 ------------------------------------------------------------------------------
 
-
-This project is covered by two different licenses: MIT and Apache.
-
-#### MIT License ####
-
-The following files were ported to Go from C files of libyaml, and thus
-are still covered by their original MIT license, with the additional
-copyright staring in 2011 when the project was ported over:
-
-    apic.go emitterc.go parserc.go readerc.go scannerc.go
-    writerc.go yamlh.go yamlprivateh.go
-
-Copyright (c) 2006-2010 Kirill Simonov
-Copyright (c) 2006-2011 Kirill Simonov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of
-this software and associated documentation files (the "Software"), to deal in
-the Software without restriction, including without limitation the rights to
-use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is furnished to do
-so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-### Apache License ###
-
-All the remaining project files are covered by the Apache license:
-
-Copyright (c) 2011-2019 Canonical Ltd
+Copyright 2011-2016 Canonical Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -1662,6 +1663,51 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+------------------------------------------------------------------------------
+text 05b8a1ce6ce5 — applies to:
+    github.com/go-openapi/jsonpointer@v1.0.0 (NOTICE)
+------------------------------------------------------------------------------
+
+Copyright 2015-2025 go-swagger maintainers
+
+// SPDX-FileCopyrightText: Copyright 2015-2025 go-swagger maintainers
+// SPDX-License-Identifier: Apache-2.0
+
+This software library, github.com/go-openapi/jsonpointer, includes software developed
+by the go-swagger and go-openapi maintainers ("go-swagger maintainers").
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this software except in compliance with the License.
+
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0.
+
+This software is copied from, derived from, and inspired by other original software products.
+It ships with copies of other software which license terms are recalled below.
+
+The original software was authored on 25-02-2013 by sigu-399 (https://github.com/sigu-399, sigu.399@gmail.com).
+
+github.com/sigu-399/jsonpointer
+===========================
+
+// SPDX-FileCopyrightText: Copyright 2013 sigu-399 ( https://github.com/sigu-399 )
+// SPDX-License-Identifier: Apache-2.0
+
+Copyright 2013 sigu-399 ( https://github.com/sigu-399 )
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ------------------------------------------------------------------------------
 text 089ed381a9f6 — applies to:
@@ -3267,19 +3313,6 @@ Copyright 2010 The Go Authors
 See source code for license details.
 
 ------------------------------------------------------------------------------
-text 87baa92c3100 — applies to:
-    github.com/mailru/easyjson@v0.7.7 (LICENSE)
-------------------------------------------------------------------------------
-
-Copyright (c) 2016 Mail.Ru Group
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-------------------------------------------------------------------------------
 text 895d625d7bae — applies to:
     github.com/blang/semver/v4@v4.0.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -3846,33 +3879,6 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
-text ad754e4f7d16 — applies to:
-    github.com/josharian/intern@v1.0.0 (license.md)
-------------------------------------------------------------------------------
-
-MIT License
-
-Copyright (c) 2019 Josh Bleecher Snyder
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-------------------------------------------------------------------------------
 text b8514c577c1c — applies to:
     github.com/spf13/pflag@v1.0.9 (LICENSE)
 ------------------------------------------------------------------------------
@@ -4372,6 +4378,62 @@ text c6596eb7be85 — applies to:
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+------------------------------------------------------------------------------
+text d18f6323b71b — applies to:
+    go.yaml.in/yaml/v3@v3.0.4 (LICENSE)
+------------------------------------------------------------------------------
+
+
+This project is covered by two different licenses: MIT and Apache.
+
+#### MIT License ####
+
+The following files were ported to Go from C files of libyaml, and thus
+are still covered by their original MIT license, with the additional
+copyright staring in 2011 when the project was ported over:
+
+    apic.go emitterc.go parserc.go readerc.go scannerc.go
+    writerc.go yamlh.go yamlprivateh.go
+
+Copyright (c) 2006-2010 Kirill Simonov
+Copyright (c) 2006-2011 Kirill Simonov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Apache License ###
+
+All the remaining project files are covered by the Apache license:
+
+Copyright (c) 2011-2019 Canonical Ltd
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 
 ------------------------------------------------------------------------------
 text dcdabe03bef2 — applies to:
