@@ -170,7 +170,7 @@ lint:
 	$(MAKE) -C operator lint
 	golangci-lint run ./fractioning-manager/...
 
-validate: license-check
+validate: license-check manifests-check
 	$(MAKE) -C operator validate
 	go fmt ./fractioning-manager/...
 	go vet ./fractioning-manager/...
@@ -221,13 +221,16 @@ third-party-check: ## Fail if THIRD-PARTY.txt does not match the linked dependen
 # Generate (CRDs, deepcopy, manifests) — delegated to operator
 # -----------------------------------------------------------
 
-.PHONY: generate manifests
+.PHONY: generate manifests manifests-check
 
 generate:
 	$(MAKE) -C operator generate
 
 manifests:
 	$(MAKE) -C operator manifests
+
+manifests-check:
+	$(MAKE) -C operator manifests-check
 
 # -----------------------------------------------------------
 # Deploy

@@ -5,6 +5,8 @@ package main
 
 import (
 	"crypto/tls"
+	"flag"
+	"fmt"
 	"os"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -22,6 +24,7 @@ import (
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/config"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/controller"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/crdupgrade"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 	// +kubebuilder:scaffold:imports
 )
@@ -37,7 +40,17 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// A subcommand of this binary rather than its own image, so the hook Job runs
+// something already built, scanned and published in a -fips variant.
+const applyCRDsCommand = "apply-crds"
+
 func main() {
+	// Before ParseFlags, which would reject the subcommand as a stray argument.
+	if len(os.Args) > 1 && os.Args[1] == applyCRDsCommand {
+		runApplyCRDs(os.Args[2:])
+		return
+	}
+
 	cfg := config.ParseFlags()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(cfg.Development)))
@@ -190,4 +203,31 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+// runApplyCRDs server-side applies the CRDs embedded in this image and exits.
+// The chart runs it as a pre-install/pre-upgrade hook Job.
+func runApplyCRDs(args []string) {
+	fs := flag.NewFlagSet(applyCRDsCommand, flag.ExitOnError)
+	development := fs.Bool("development", false, "Enable development-mode logging (debug level, human-readable).")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	// fs.Parse stops at the first non-flag and ignores the rest, so a typo'd
+	// flag would otherwise apply the CRDs silently under the wrong settings.
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "%s takes no positional arguments, got %q\n", applyCRDsCommand, fs.Args())
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ctrl.SetLogger(zap.New(zap.UseDevMode(*development)))
+	log := ctrl.Log.WithName(applyCRDsCommand)
+
+	ctx := ctrl.LoggerInto(ctrl.SetupSignalHandler(), log)
+	if err := crdupgrade.Run(ctx); err != nil {
+		log.Error(err, "Failed to apply CRDs")
+		os.Exit(1)
+	}
+	log.Info("CRDs applied")
 }

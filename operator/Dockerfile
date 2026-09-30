@@ -25,9 +25,11 @@ COPY pkg/ pkg/
 COPY operator/go.mod operator/go.sum operator/
 RUN cd operator && go mod download
 
-# Copy operator source.
-COPY operator/cmd/       operator/cmd/
-COPY operator/internal/  operator/internal/
+# charts/crds is here for the go:embed in charts/crds/embed.go, which backs the
+# `apply-crds` subcommand.
+COPY operator/cmd/         operator/cmd/
+COPY operator/internal/    operator/internal/
+COPY operator/charts/crds/ operator/charts/crds/
 
 RUN cd operator && GOFIPS140=${GOFIPS140} CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -o manager cmd/main.go
 

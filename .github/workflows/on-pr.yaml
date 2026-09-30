@@ -64,6 +64,19 @@ jobs:
       # regenerate it in the same PR.
       - run: make third-party-check
 
+  manifests:
+    name: Generated manifests
+    runs-on: ubuntu-latest
+    # The generated CRD is the one file Helm installs, the image embeds and
+    # envtest loads. A type change without a regenerated CRD would otherwise
+    # merge silently, and the new field would be pruned on a cluster.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make manifests-check
+
   fips-build-args:
     name: FIPS build args
     runs-on: ubuntu-latest

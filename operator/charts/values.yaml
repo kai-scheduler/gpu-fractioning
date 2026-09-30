@@ -107,6 +107,25 @@ metricsAgent:
     # gpuSmUtilizationPercent: <metric name>
     # gpuSmUtilizationPercentNormalized: <metric name>
 
+# crdUpgrader is the pre-install/pre-upgrade hook Job that applies the
+# GpuFractioningConfig CRD. Helm installs a chart's crds/ once and never updates
+# it, so without this a release that adds a CRD field would appear to succeed
+# while the API server pruned that field.
+crdUpgrader:
+  # Disable only if you apply the CRD yourself (GitOps, or a cluster where the
+  # chart cannot be granted CRD write). `helm upgrade` then leaves it untouched.
+  enabled: true
+  # A failure here is a permissions or schema problem; a retry will not fix it.
+  backoffLimit: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+      ephemeral-storage: 100Mi
+
 serviceAccount:
   create: true
   name: ""

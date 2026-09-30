@@ -54,7 +54,9 @@ var _ = BeforeSuite(func() {
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
+		// The chart's own crds/, so these tests validate the schema that ships.
+		// envtest reads only .yaml/.yml/.json, so embed.go here is ignored.
+		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "charts", "crds")},
 		ErrorIfCRDPathMissing: true,
 	}
 

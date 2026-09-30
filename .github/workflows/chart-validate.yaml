@@ -76,9 +76,12 @@ jobs:
           # -ignore-missing-schemas skips CRs whose CRD schemas aren't published
           # (our GpuFractioningConfig, plus ServiceMonitor/PodMonitor from the
           # Prometheus Operator) rather than failing on them.
+          # --include-crds: helm template omits crds/ by default, which would
+          # drop the CRD from kubeconform's coverage entirely.
           for extra in "" "--set prometheus.enabled=true"; do
             echo "== helm template ${extra:-(defaults)} =="
             helm template gpu-fractioning operator/charts $extra \
+              --include-crds \
               --api-versions monitoring.coreos.com/v1 \
               | kubeconform -strict -summary -ignore-missing-schemas \
                   -kubernetes-version 1.31.0

@@ -7,6 +7,9 @@
 # but they are development-only and must not ship to users.
 tests/
 
+# The go:embed shim. It has to live in crds/, but users have no use for it.
+crds/embed.go
+
 .DS_Store
 .git/
 .gitignore

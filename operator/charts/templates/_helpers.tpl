@@ -110,6 +110,15 @@ Usage:
 {{- end }}
 
 {{/*
+Name shared by the crd-upgrader hook Job and the ServiceAccount, ClusterRole and
+ClusterRoleBinding it runs under. The ClusterRole and binding are cluster-scoped
+and so must not collide between releases in different namespaces.
+*/}}
+{{- define "gpu-fractioning.crdUpgraderName" -}}
+{{- printf "%s-crd-upgrader" (include "gpu-fractioning.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
 Daemon service account name.
 */}}
 {{- define "gpu-fractioning.daemonServiceAccountName" -}}

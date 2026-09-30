@@ -135,6 +135,7 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 | `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access |
 | `supportSmSharing` | `true` | installation-time toggle for the `sm-sharing` compute mode (mpsd's shared MPS server + fractiond's routing to it); disable it to revert to pre-feature behaviour without a code rollback, and the `gpu-compute.mode: sm-sharing` annotation is rejected like any other invalid value. Applies to containers created afterwards — stop sm-sharing workloads and drain the shared server before disabling |
 | `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates (GPU Operator, container toolkit, device plugin) when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
+| `crdUpgrader.enabled` | `true` | run the `pre-install`/`pre-upgrade` hook Job that applies the `GpuFractioningConfig` CRD, which is how a schema change reaches an existing install — Helm does not update a chart's `crds/` on upgrade. Disable only if you apply the CRD yourself; see [Upgrading](#upgrading) |
 | `metricsAgent.enabled` | `true` | run the metricsd metrics sidecar |
 | `metrics.enabled` / `metrics.port` | `true` / `8080` | controller metrics endpoint (plain HTTP) |
 | `prometheus.enabled` | `false` | install a `ServiceMonitor` + `PodMonitor` (also requires `metrics.enabled` and the Prometheus-Operator CRDs) |
@@ -142,6 +143,34 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 | `global.fipsMode` | `off` | `on` deploys the FIPS 140-3 image variants (`<version>-fips`); `only` also enforces FIPS at runtime, for assessment rather than production. See [FIPS 140-3](docs/fips/README.md) |
 
 > The GPU **nodeSelector** for the DaemonSets is set on the `GpuFractioningConfig` CR (`spec.nodeSelector`), not the chart-level `nodeSelector`.
+
+### Upgrading
+
+```sh
+helm upgrade gpu-fractioning \
+  oci://ghcr.io/kai-scheduler/gpu-fractioning \
+  --version <VERSION> \
+  --namespace gpu-fractioning
+```
+
+The `GpuFractioningConfig` CRD ships in the chart's `crds/` directory, so Helm installs it on a fresh install, skips it if it is already present, and leaves it in place on `helm uninstall` — existing `GpuFractioningConfig` data survives an uninstall, and a reinstall does not fail on the existing CRD.
+
+Helm never *updates* a chart's `crds/`, though, so the chart runs a `pre-install`/`pre-upgrade` hook Job (`crd-upgrader`) that server-side applies the CRD before the rest of the release. A release that adds a field to `GpuFractioningConfig` therefore reaches an existing install without any manual step. The Job runs the operator image's `apply-crds` subcommand — no extra image to mirror — and waits for the CRD to be Established before the install proceeds. It is deleted once it succeeds; on failure it is left behind for inspection:
+
+```sh
+kubectl -n gpu-fractioning logs job/gpu-fractioning-crd-upgrader
+```
+
+It needs cluster-scoped RBAC, which the chart creates and deletes alongside it: `create` on `customresourcedefinitions`, plus `get`/`patch`/`update` restricted by `resourceNames` to `gpufractioningconfigs.gpu-fractioning.kai.scheduler`.
+
+Set `crdUpgrader.enabled=false` if you manage CRDs yourself — GitOps, or a cluster where the chart cannot be granted that RBAC. `helm upgrade` then leaves the CRD untouched, so apply it yourself before upgrading:
+
+```sh
+helm pull oci://ghcr.io/kai-scheduler/gpu-fractioning --version <VERSION> --untar
+kubectl apply --server-side --force-conflicts -f gpu-fractioning/crds/
+```
+
+`--force-conflicts` because the CRD on the cluster is owned by Helm's field manager. The apply is a no-op when the schema has not changed.
 
 ## Requesting a fractional GPU
 
@@ -241,8 +270,10 @@ With the Prometheus Operator installed, set `prometheus.enabled=true` to have th
 ## Repository structure
 
 ```
-├── api/               # GpuFractioningConfig CRD types (v1alpha1)
+├── api/               # GpuFractioningConfig CRD types (v1alpha1) — source of truth for the schema
 ├── operator/          # Controller (reconciler) + Helm chart (operator/charts/)
+│   └── charts/crds/   #   the generated CRD: `make manifests` writes it, Helm installs it,
+│                      #   the operator image embeds it, envtest loads it
 ├── fractioning-manager/   # Node-level components
 │   ├── mpsd/          #   MPS control daemon supervisor
 │   ├── fractiond/      #   NRI plugin (memory-limit injection)
@@ -259,10 +290,15 @@ With the Prometheus Operator installed, set `prometheus.enabled=true` to have th
 ```sh
 make build      # build the operator, mpsd, and fractiond binaries
 make test       # run unit tests
-make validate   # format, vet, and lint
+make validate   # format, vet, lint, license and generated-manifest checks
+make manifests  # regenerate the CRD after changing the types in api/
 ```
 
 metricsd is a separate Go module (cgo/NVML), so it is not covered by the top-level `make build`; build it with `make -C fractioning-manager/metricsd build`. `make test` and `make docker-build` do cover all four components.
+
+### Changing the `GpuFractioningConfig` schema
+
+The Go types in [`api/v1alpha1`](api/v1alpha1) are the source of truth. `make manifests` runs controller-gen over them and writes [`operator/charts/crds/`](operator/charts/crds), which is the CRD's only copy — Helm installs it from there, the operator image embeds it for the `crd-upgrader` hook, and the controller's envtest suite loads it, so the schema under test is the schema that ships. Edit the types, run `make manifests`, and commit the regenerated CRD; `make manifests-check` (a required PR check) fails if the two have drifted.
 
 ## Roadmap
 

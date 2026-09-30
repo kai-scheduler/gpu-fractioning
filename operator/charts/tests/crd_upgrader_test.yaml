@@ -1,0 +1,99 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The hook annotations are the mechanism: a wrong weight or delete policy and
+# the Job runs without its ServiceAccount, or is left behind to collide with the
+# next upgrade. Nothing else in the chart would fail if they changed.
+#
+# appVersion is pinned so the expected image tag does not move with releases.
+suite: crd-upgrader hook
+chart:
+  version: 0.1.0
+  appVersion: 0.1.0
+tests:
+  - it: runs the operator image's apply-crds subcommand
+    templates:
+      - hooks/pre/crd-upgrader.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ["apply-crds"]
+
+  # Must run before the release but after its own RBAC, which is weighted -1.
+  - it: is a pre-install and pre-upgrade hook, cleaned up after it succeeds
+    templates:
+      - hooks/pre/crd-upgrader.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "2"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation
+
+  - it: selects the FIPS image variant with the rest of the chart
+    templates:
+      - hooks/pre/crd-upgrader.yaml
+    set:
+      global.fipsMode: "on"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0-fips
+
+  - it: enforces FIPS at runtime when fipsMode is only
+    templates:
+      - hooks/pre/crd-upgrader.yaml
+    set:
+      global.fipsMode: "only"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GODEBUG
+            value: fips140=only,tlsmlkem=0
+
+  # The write verbs must stay pinned to this chart's own CRD. Unscoped, the Job
+  # could rewrite the schema of any CRD in the cluster.
+  - it: grants schema writes only on the GpuFractioningConfig CRD
+    templates:
+      - hooks/pre/crd-upgrader-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - gpufractioningconfigs.gpu-fractioning.kai.scheduler
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "patch", "update"]
+
+  - it: names the RBAC after the release so two installs do not collide
+    templates:
+      - hooks/pre/crd-upgrader-rbac.yaml
+    release:
+      name: other
+      namespace: other-ns
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: metadata.name
+          value: other-gpu-fractioning-crd-upgrader
+
+  - it: is omitted entirely when disabled
+    templates:
+      - hooks/pre/crd-upgrader.yaml
+      - hooks/pre/crd-upgrader-rbac.yaml
+    set:
+      crdUpgrader.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

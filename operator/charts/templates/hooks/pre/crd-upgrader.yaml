@@ -1,0 +1,73 @@
+{{/*
+Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}}
+{{- if .Values.crdUpgrader.enabled }}
+{{/*
+Applies the CRD before the rest of the release. Helm installs a chart's crds/
+once and never revisits it, so without this a schema change would never reach
+an existing install. It has to be a hook that *applies* the CRD rather than a
+hook that *is* one: Helm creates hook resources with a plain Create, and the
+before-hook-creation delete policy is skipped for CustomResourceDefinition.
+
+The Job waits for Established, so the post-install `default` CR cannot outrun it.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "2"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: {{ .Values.crdUpgrader.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "gpu-fractioning.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: crd-upgrader
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "gpu-fractioning.crdUpgraderName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: crd-upgrader
+          image: "{{ .Values.images.operator.repository }}:{{ include "gpu-fractioning.imageTag" (dict "root" $ "tag" .Values.images.operator.tag) }}"
+          imagePullPolicy: {{ .Values.images.operator.pullPolicy }}
+          args:
+            - apply-crds
+          {{- with include "gpu-fractioning.fipsOnlyEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.crdUpgrader.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,63 @@
+{{/*
+Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}}
+{{- if .Values.crdUpgrader.enabled }}
+{{/*
+Identity for the crd-upgrader Job, weighted ahead of it (-1 vs 2). Safe to
+delete on success: Helm runs hook-succeeded deletions only once every hook in
+the phase has completed.
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+rules:
+  {{/* Unscoped because RBAC cannot match resourceNames on create. Only
+       reachable when the CRD is absent, i.e. a --skip-crds install. */}}
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["create"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    resourceNames:
+      - gpufractioningconfigs.gpu-fractioning.kai.scheduler
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "gpu-fractioning.crdUpgraderName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
