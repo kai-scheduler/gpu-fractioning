@@ -125,7 +125,7 @@ github.com/fxamacker/cbor/v2
     License:      LICENSE [text 78cad457d5ea]
 
 github.com/go-logr/logr
-    Version:      v1.4.3
+    Version:      v1.4.4
     Source:       https://github.com/go-logr/logr
     Linked into:  mpsd, operator
     License:      LICENSE [text b40930bbcf80]
@@ -371,7 +371,7 @@ go.opentelemetry.io/otel/exporters/otlp/otlptrace
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/metric
-    Version:      v1.44.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -383,13 +383,13 @@ go.opentelemetry.io/otel/sdk
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/trace
-    Version:      v1.44.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel
-    Version:      v1.44.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -419,7 +419,7 @@ go.yaml.in/yaml/v2
     License:      LICENSE [text b40930bbcf80], LICENSE.libyaml [text a94710b55e03], NOTICE [text f6c2dd3a67b5]
 
 go.yaml.in/yaml/v3
-    Version:      v3.0.4
+    Version:      v3.0.5
     Source:       https://github.com/yaml/go-yaml
     Linked into:  mpsd, operator
     License:      LICENSE [text d18f6323b71b], NOTICE [text f6c2dd3a67b5]
@@ -1127,10 +1127,10 @@ text 1ae07514be1d — applies to:
     go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.65.0 (LICENSE)
     go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.40.0 (LICENSE)
     go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.40.0 (LICENSE)
-    go.opentelemetry.io/otel/metric@v1.44.0 (LICENSE)
+    go.opentelemetry.io/otel/metric@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/sdk@v1.44.0 (LICENSE)
-    go.opentelemetry.io/otel/trace@v1.44.0 (LICENSE)
-    go.opentelemetry.io/otel@v1.44.0 (LICENSE)
+    go.opentelemetry.io/otel/trace@v1.46.0 (LICENSE)
+    go.opentelemetry.io/otel@v1.46.0 (LICENSE)
 ------------------------------------------------------------------------------
 
                                  Apache License
@@ -1367,7 +1367,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text b40930bbcf80 — applies to:
-    github.com/go-logr/logr@v1.4.3 (LICENSE)
+    github.com/go-logr/logr@v1.4.4 (LICENSE)
     github.com/go-logr/zapr@v1.3.0 (LICENSE)
     go.yaml.in/yaml/v2@v2.4.4 (LICENSE)
     k8s.io/cri-api@v0.36.3 (LICENSE)
@@ -1613,7 +1613,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ------------------------------------------------------------------------------
 text f6c2dd3a67b5 — applies to:
     go.yaml.in/yaml/v2@v2.4.4 (NOTICE)
-    go.yaml.in/yaml/v3@v3.0.4 (NOTICE)
+    go.yaml.in/yaml/v3@v3.0.5 (NOTICE)
 ------------------------------------------------------------------------------
 
 Copyright 2011-2016 Canonical Ltd.
@@ -4381,7 +4381,7 @@ text c6596eb7be85 — applies to:
 
 ------------------------------------------------------------------------------
 text d18f6323b71b — applies to:
-    go.yaml.in/yaml/v3@v3.0.4 (LICENSE)
+    go.yaml.in/yaml/v3@v3.0.5 (LICENSE)
 ------------------------------------------------------------------------------
 
 
