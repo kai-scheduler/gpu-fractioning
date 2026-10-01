@@ -73,8 +73,13 @@ func applyObjects(ctx context.Context, c client.Client, objs []*unstructured.Uns
 	return nil
 }
 
-// waitEstablished blocks until the API server serves the kind. The chart
-// applies a GpuFractioningConfig immediately after this hook returns.
+// waitEstablished blocks until the API server serves the kind, so the chart can
+// apply a GpuFractioningConfig straight after this hook.
+//
+// This only really waits on a first install. On an upgrade the CRD is already
+// Established and returns on the first poll: CRD conditions carry no
+// observedGeneration unless the CRDObservedGenerationTracking feature gate is
+// on, so there is nothing to tell us the new schema has been picked up.
 func waitEstablished(ctx context.Context, c client.Client, name string) error {
 	obj := &unstructured.Unstructured{}
 	obj.SetAPIVersion("apiextensions.k8s.io/v1")
@@ -85,6 +90,12 @@ func waitEstablished(ctx context.Context, c client.Client, name string) error {
 			if err := c.Get(ctx, client.ObjectKey{Name: name}, obj); err != nil {
 				return false, err
 			}
+			// A name clash with another CRD never resolves, and its message
+			// names what clashed. Without this it surfaces as a bare timeout
+			// two minutes later with the reason sitting unread in the object.
+			if cond, ok := condition(obj, "NamesAccepted"); ok && cond["status"] == "False" {
+				return false, fmt.Errorf("names rejected: %v", cond["message"])
+			}
 			return isEstablished(obj), nil
 		})
 	if err != nil {
@@ -93,19 +104,21 @@ func waitEstablished(ctx context.Context, c client.Client, name string) error {
 	return nil
 }
 
-func isEstablished(obj *unstructured.Unstructured) bool {
+func condition(obj *unstructured.Unstructured, want string) (map[string]any, bool) {
 	conds, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
 	if err != nil || !found {
-		return false
+		return nil, false
 	}
 	for _, c := range conds {
 		cond, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if cond["type"] == "Established" && cond["status"] == "True" {
-			return true
+		if ok && cond["type"] == want {
+			return cond, true
 		}
 	}
-	return false
+	return nil, false
+}
+
+func isEstablished(obj *unstructured.Unstructured) bool {
+	cond, ok := condition(obj, "Established")
+	return ok && cond["status"] == "True"
 }

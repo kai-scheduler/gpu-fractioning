@@ -155,7 +155,9 @@ helm upgrade gpu-fractioning \
 
 The `GpuFractioningConfig` CRD ships in the chart's `crds/` directory, so Helm installs it on a fresh install, skips it if it is already present, and leaves it in place on `helm uninstall` — existing `GpuFractioningConfig` data survives an uninstall, and a reinstall does not fail on the existing CRD.
 
-Helm never *updates* a chart's `crds/`, though, so the chart runs a `pre-install`/`pre-upgrade` hook Job (`crd-upgrader`) that server-side applies the CRD before the rest of the release. A release that adds a field to `GpuFractioningConfig` therefore reaches an existing install without any manual step. The Job runs the operator image's `apply-crds` subcommand — no extra image to mirror — and waits for the CRD to be Established before the install proceeds. It is deleted once it succeeds; on failure it is left behind for inspection:
+Helm never *updates* a chart's `crds/`, though, so the chart runs a `pre-install`/`pre-upgrade` hook Job (`crd-upgrader`) that server-side applies the CRD before the rest of the release. A release that adds a field to `GpuFractioningConfig` therefore reaches an existing install without any manual step, and one that drops a field propagates too — the apply replaces the schema wholesale, so a removed `required` entry or CEL validation rule stops being enforced rather than lingering.
+
+The Job runs the operator image's `apply-crds` subcommand — no extra image to mirror — and waits for the CRD to be Established, which is what guards a first install, where the kind is not yet served. It is deleted once it succeeds; on failure it is left behind for inspection:
 
 ```sh
 kubectl -n gpu-fractioning logs job/gpu-fractioning-crd-upgrader

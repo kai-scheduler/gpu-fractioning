@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/wait"
+	restclient "k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
@@ -22,7 +26,10 @@ import (
 
 const crdName = "gpufractioningconfigs.gpu-fractioning.kai.scheduler"
 
-var testClient client.Client
+var (
+	testClient client.Client
+	testCfg    *restclient.Config
+)
 
 func TestMain(m *testing.M) {
 	// No CRDDirectoryPaths: installing the CRD is what is under test.
@@ -34,6 +41,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	testCfg = cfg
 	testClient, err = client.New(cfg, client.Options{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build client: %v\n", err)
@@ -225,4 +233,156 @@ func hasSpecProperty(t *testing.T, obj *unstructured.Unstructured, name string) 
 	}
 	_, ok := specProps(t, versions[0])[name]
 	return ok
+}
+
+// TestApplyPrunesRemovedSchema pins what happens to a field the previous owner
+// set and this manifest no longer ships. Force-apply replaces the schema
+// subtree wholesale, so the removal does propagate — a stale required entry or
+// CEL rule is not left behind enforcing a rule the chart dropped.
+func TestApplyPrunesRemovedSchema(t *testing.T) {
+	ctx := context.Background()
+	deleteCRD(t, ctx)
+
+	objs, err := crds.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// A Helm-created CRD carrying a property, a required entry and a CEL rule
+	// that the chart has since dropped.
+	stale := withExtraProperty(t, objs, "staleProperty")[0]
+	versions, _, _ := unstructured.NestedSlice(stale.Object, "spec", "versions")
+	schema := specSchema(t, versions[0])
+	schema["required"] = []any{"nodeSelector", "staleProperty"}
+	schema["x-kubernetes-validations"] = []any{
+		map[string]any{"rule": "has(self.staleProperty)", "message": "stale rule"},
+	}
+	if err := unstructured.SetNestedSlice(stale.Object, versions, "spec", "versions"); err != nil {
+		t.Fatalf("SetNestedSlice: %v", err)
+	}
+	stale.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "Helm"})
+	if err := testClient.Create(ctx, stale, client.FieldOwner("helm")); err != nil {
+		t.Fatalf("Create() as helm error = %v", err)
+	}
+
+	if err := Apply(ctx, testClient); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	got := getCRD(t, ctx)
+	gotVersions, _, _ := unstructured.NestedSlice(got.Object, "spec", "versions")
+	gotSchema := specSchema(t, gotVersions[0])
+
+	if hasSpecProperty(t, got, "staleProperty") {
+		t.Error("the dropped property is still in the served schema")
+	}
+	if req := gotSchema["required"]; !reflect.DeepEqual(req, []any{"nodeSelector"}) {
+		t.Errorf("required = %v, want [nodeSelector]; the stale entry survived", req)
+	}
+	if rules, ok := gotSchema["x-kubernetes-validations"]; ok {
+		t.Errorf("the dropped CEL rule is still enforced: %v", rules)
+	}
+	// Helm's own metadata is not ours to prune: the apply config says nothing
+	// about labels, so the release markers Helm set must survive.
+	if got.GetLabels()["app.kubernetes.io/managed-by"] != "Helm" {
+		t.Errorf("labels = %v, want Helm's release markers kept", got.GetLabels())
+	}
+}
+
+// TestApplyUnderHookRBAC runs the apply as the ServiceAccount the chart creates,
+// to confirm the ClusterRole really is sufficient while scoped by resourceNames
+// — including the create path, which only the apply reaches.
+func TestApplyUnderHookRBAC(t *testing.T) {
+	ctx := context.Background()
+	deleteCRD(t, ctx)
+
+	const user = "system:serviceaccount:gpu-fractioning:crd-upgrader"
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "crd-upgrader-test"},
+		// Mirrors templates/hooks/pre/crd-upgrader-rbac.yaml.
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups:     []string{"apiextensions.k8s.io"},
+			Resources:     []string{"customresourcedefinitions"},
+			ResourceNames: []string{crdName},
+			Verbs:         []string{"create", "get", "patch", "update"},
+		}},
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "crd-upgrader-test"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "crd-upgrader-test"},
+		Subjects:   []rbacv1.Subject{{Kind: "User", Name: user, APIGroup: rbacv1.GroupName}},
+	}
+	for _, obj := range []client.Object{role, binding} {
+		if err := testClient.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("Create() error = %v", err)
+		}
+		t.Cleanup(func() { _ = testClient.Delete(ctx, obj) })
+	}
+
+	cfg := *testCfg
+	cfg.Impersonate = restclient.ImpersonationConfig{UserName: user}
+	as, err := client.New(&cfg, client.Options{})
+	if err != nil {
+		t.Fatalf("client.New() error = %v", err)
+	}
+
+	// Creates the CRD, so it exercises the create verb through the apply path.
+	if err := Apply(ctx, as); err != nil {
+		t.Fatalf("Apply() as the hook ServiceAccount error = %v", err)
+	}
+	// And again, now that it exists, for the update path.
+	if err := Apply(ctx, as); err != nil {
+		t.Fatalf("second Apply() error = %v", err)
+	}
+
+	// The scoping has to actually bite: any other CRD must be refused.
+	other := mustLoadFirst(t).DeepCopy()
+	other.SetName("widgets.example.com")
+	_ = unstructured.SetNestedField(other.Object, "example.com", "spec", "group")
+	_ = unstructured.SetNestedMap(other.Object, map[string]any{
+		"kind": "Widget", "listKind": "WidgetList", "plural": "widgets", "singular": "widget",
+	}, "spec", "names")
+	err = applyObjects(ctx, as, []*unstructured.Unstructured{other})
+	if !apierrors.IsForbidden(err) {
+		t.Errorf("applying an unrelated CRD: err = %v, want Forbidden", err)
+	}
+}
+
+func mustLoadFirst(t *testing.T) *unstructured.Unstructured {
+	t.Helper()
+	objs, err := crds.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	return objs[0]
+}
+
+// deleteCRD removes the CRD if present and waits for it to go.
+func deleteCRD(t *testing.T, ctx context.Context) {
+	t.Helper()
+	obj := &unstructured.Unstructured{}
+	obj.SetAPIVersion("apiextensions.k8s.io/v1")
+	obj.SetKind("CustomResourceDefinition")
+	obj.SetName(crdName)
+	if err := testClient.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	waitGone(t, ctx)
+}
+
+// specSchema returns the live schema node for spec inside a CRD version.
+func specSchema(t *testing.T, version any) map[string]any {
+	t.Helper()
+	cur, ok := version.(map[string]any)
+	if !ok {
+		t.Fatalf("version is %T, want map", version)
+	}
+	for _, key := range []string{"schema", "openAPIV3Schema", "properties", "spec"} {
+		next, ok := cur[key].(map[string]any)
+		if !ok {
+			t.Fatalf("%s is %T, want map", key, cur[key])
+		}
+		cur = next
+	}
+	return cur
 }

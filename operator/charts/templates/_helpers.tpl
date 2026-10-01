@@ -111,11 +111,17 @@ Usage:
 
 {{/*
 Name shared by the crd-upgrader hook Job and the ServiceAccount, ClusterRole and
-ClusterRoleBinding it runs under. The ClusterRole and binding are cluster-scoped
-and so must not collide between releases in different namespaces.
+ClusterRoleBinding it runs under. The ClusterRole and binding are cluster-scoped,
+so this must not collide between releases in different namespaces.
+
+The base is truncated to 50 before the 13-character suffix is appended, not
+after. Appending first and truncating to 63 silently drops the suffix once
+fullname reaches 50 characters, returning fullname itself — which collides with
+the operator's own ServiceAccount and RBAC, and the hook's delete policies would
+then delete them out from under the running operator.
 */}}
 {{- define "gpu-fractioning.crdUpgraderName" -}}
-{{- printf "%s-crd-upgrader" (include "gpu-fractioning.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-crd-upgrader" (include "gpu-fractioning.fullname" . | trunc 50 | trimSuffix "-") }}
 {{- end }}
 
 {{/*

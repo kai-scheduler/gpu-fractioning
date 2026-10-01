@@ -59,22 +59,15 @@ tests:
             name: GODEBUG
             value: fips140=only,tlsmlkem=0
 
-  # The write verbs must stay pinned to this chart's own CRD. Unscoped, the Job
-  # could rewrite the schema of any CRD in the cluster.
+  # Unscoped, the Job could rewrite the schema of any CRD in the cluster.
   - it: grants schema writes only on the GpuFractioningConfig CRD
     templates:
       - hooks/pre/crd-upgrader-rbac.yaml
     documentIndex: 1
     asserts:
-      - isKind:
-          of: ClusterRole
       - equal:
-          path: rules[1].resourceNames
-          value:
-            - gpufractioningconfigs.gpu-fractioning.kai.scheduler
-      - equal:
-          path: rules[1].verbs
-          value: ["get", "patch", "update"]
+          path: rules[0].verbs
+          value: ["create", "get", "patch", "update"]
 
   - it: names the RBAC after the release so two installs do not collide
     templates:
@@ -87,6 +80,39 @@ tests:
       - equal:
           path: metadata.name
           value: other-gpu-fractioning-crd-upgrader
+
+  # A long release name used to truncate the "-crd-upgrader" suffix away
+  # entirely, leaving these named exactly like the operator's own ServiceAccount
+  # and RBAC — which the hook's delete policies would then delete out from under
+  # the running operator.
+  - it: keeps the suffix under a release name long enough to truncate
+    templates:
+      - hooks/pre/crd-upgrader-rbac.yaml
+      - hooks/pre/crd-upgrader.yaml
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: -crd-upgrader$
+      - notEqual:
+          path: metadata.name
+          value: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-gpu-fractioning
+
+  - it: scopes every verb to this chart's own CRD
+    templates:
+      - hooks/pre/crd-upgrader-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - lengthEqual:
+          path: rules
+          count: 1
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - gpufractioningconfigs.gpu-fractioning.kai.scheduler
 
   - it: is omitted entirely when disabled
     templates:

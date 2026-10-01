@@ -115,7 +115,8 @@ crdUpgrader:
   # Disable only if you apply the CRD yourself (GitOps, or a cluster where the
   # chart cannot be granted CRD write). `helm upgrade` then leaves it untouched.
   enabled: true
-  # A failure here is a permissions or schema problem; a retry will not fix it.
+  # One retry, for the transient pod failures (an image-pull blip, an eviction
+  # mid-run). A permissions or schema error will not improve on a second attempt.
   backoffLimit: 1
   resources:
     limits:
