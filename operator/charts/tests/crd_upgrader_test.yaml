@@ -59,7 +59,6 @@ tests:
             name: GODEBUG
             value: fips140=only,tlsmlkem=0
 
-  # Unscoped, the Job could rewrite the schema of any CRD in the cluster.
   - it: grants schema writes only on the GpuFractioningConfig CRD
     templates:
       - hooks/pre/crd-upgrader-rbac.yaml

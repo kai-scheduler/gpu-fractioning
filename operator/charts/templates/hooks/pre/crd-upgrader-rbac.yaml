@@ -31,9 +31,6 @@ metadata:
     "helm.sh/hook-weight": "-1"
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
 rules:
-  {{/* create is scoped too: the Job only ever server-side applies, and the
-       apiserver authorizes create on the apply path with the name from the URL,
-       so resourceNames matches. This role cannot touch any other CRD. */}}
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     resourceNames:
