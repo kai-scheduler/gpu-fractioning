@@ -107,7 +107,7 @@ github.com/evanphx/json-patch/v5
     License:      LICENSE [text 9cb8ce7ebecf]
 
 github.com/felixge/httpsnoop
-    Version:      v1.0.4
+    Version:      v1.1.0
     Source:       https://github.com/felixge/httpsnoop
     Linked into:  operator
     License:      LICENSE.txt [text 8108e14b5cb2]
@@ -149,79 +149,79 @@ github.com/go-openapi/jsonpointer
     License:      LICENSE [text c71d239df917], NOTICE [text 05b8a1ce6ce5]
 
 github.com/go-openapi/jsonreference
-    Version:      v0.20.2
+    Version:      v1.0.0
     Source:       https://github.com/go-openapi/jsonreference
     Linked into:  mpsd, operator
-    License:      LICENSE [text cfc7749b96f6]
+    License:      LICENSE [text cfc7749b96f6], NOTICE [text 9d5bd59fec68]
 
 github.com/go-openapi/swag/cmdutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/cmdutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/conv
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/conv
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/fileutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/fileutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/jsonutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/jsonutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/loading
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/loading
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/mangling
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/mangling
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/netutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/netutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/pools
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/pools
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/stringutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/stringutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/typeutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/typeutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag/yamlutils
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag/yamlutils
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag
-    Version:      v0.27.1
+    Version:      v0.28.0
     Source:       https://github.com/go-openapi/swag
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
@@ -245,7 +245,7 @@ github.com/google/uuid
     License:      LICENSE [text 0a8d61ed3cbf]
 
 github.com/grpc-ecosystem/grpc-gateway/v2
-    Version:      v2.27.7
+    Version:      v2.30.0
     Source:       https://github.com/grpc-ecosystem/grpc-gateway/v2
     Linked into:  operator
     License:      LICENSE [text a15b1d1b1689]
@@ -353,19 +353,19 @@ go.opentelemetry.io/auto/sdk
     License:      LICENSE [text c71d239df917]
 
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
-    Version:      v0.65.0
+    Version:      v0.70.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
-    Version:      v1.40.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/exporters/otlp/otlptrace
-    Version:      v1.40.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -377,7 +377,7 @@ go.opentelemetry.io/otel/metric
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/sdk
-    Version:      v1.44.0
+    Version:      v1.46.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -395,7 +395,7 @@ go.opentelemetry.io/otel
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/proto/otlp
-    Version:      v1.9.0
+    Version:      v1.11.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text c71d239df917]
@@ -485,13 +485,13 @@ gomodules.xyz/jsonpatch/v2
     License:      LICENSE [text c6596eb7be85]
 
 google.golang.org/genproto/googleapis/api
-    Version:      v0.0.0-20260526163538-3dc84a4a5aaa
+    Version:      v0.0.0-20260819154853-08b0e4226688
     Source:       https://github.com/googleapis/go-genproto
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 google.golang.org/genproto/googleapis/rpc
-    Version:      v0.0.0-20260526163538-3dc84a4a5aaa
+    Version:      v0.0.0-20260819154853-08b0e4226688
     Source:       https://github.com/googleapis/go-genproto
     Linked into:  fractiond, operator
     License:      LICENSE [text cfc7749b96f6]
@@ -503,7 +503,7 @@ google.golang.org/grpc
     License:      LICENSE [text cfc7749b96f6], NOTICE.txt [text 693ff28ec216]
 
 google.golang.org/protobuf
-    Version:      v1.36.12-0.20260120151049-f2248ac996af
+    Version:      v1.36.12
     Source:       https://github.com/protocolbuffers/protobuf-go
     Linked into:  fractiond, metricsd, mpsd, operator
     License:      LICENSE [text 4835612df009]
@@ -633,21 +633,21 @@ Each distinct license text is reproduced once and referenced above by its
 text cfc7749b96f6 — applies to:
     cel.dev/expr@v0.25.2 (LICENSE)
     github.com/NVIDIA/go-nvml@v0.13.3-1 (LICENSE)
-    github.com/go-openapi/jsonreference@v0.20.2 (LICENSE)
-    github.com/go-openapi/swag/cmdutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/conv@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/fileutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/jsonutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/loading@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/mangling@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/netutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/pools@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/stringutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/typeutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag/yamlutils@v0.27.1 (LICENSE)
-    github.com/go-openapi/swag@v0.27.1 (LICENSE)
-    google.golang.org/genproto/googleapis/api@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
-    google.golang.org/genproto/googleapis/rpc@v0.0.0-20260526163538-3dc84a4a5aaa (LICENSE)
+    github.com/go-openapi/jsonreference@v1.0.0 (LICENSE)
+    github.com/go-openapi/swag/cmdutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/conv@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/fileutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/jsonutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/loading@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/mangling@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/netutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/pools@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/stringutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/typeutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag/yamlutils@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag@v0.28.0 (LICENSE)
+    google.golang.org/genproto/googleapis/api@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
+    google.golang.org/genproto/googleapis/rpc@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
     google.golang.org/grpc@v1.83.2 (LICENSE)
     k8s.io/api@v0.36.3 (LICENSE)
     k8s.io/apiextensions-apiserver@v0.36.0 (LICENSE)
@@ -876,7 +876,7 @@ text c71d239df917 — applies to:
     github.com/prometheus/common@v0.70.1 (LICENSE)
     github.com/prometheus/procfs@v0.21.1 (LICENSE)
     go.opentelemetry.io/auto/sdk@v1.2.1 (LICENSE)
-    go.opentelemetry.io/proto/otlp@v1.9.0 (LICENSE)
+    go.opentelemetry.io/proto/otlp@v1.11.0 (LICENSE)
 ------------------------------------------------------------------------------
 
                                  Apache License
@@ -1124,11 +1124,11 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 1ae07514be1d — applies to:
-    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.65.0 (LICENSE)
-    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.40.0 (LICENSE)
-    go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.40.0 (LICENSE)
+    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.70.0 (LICENSE)
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.46.0 (LICENSE)
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/metric@v1.46.0 (LICENSE)
-    go.opentelemetry.io/otel/sdk@v1.44.0 (LICENSE)
+    go.opentelemetry.io/otel/sdk@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/trace@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel@v1.46.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -1909,7 +1909,7 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 text 4835612df009 — applies to:
-    google.golang.org/protobuf@v1.36.12-0.20260120151049-f2248ac996af (LICENSE)
+    google.golang.org/protobuf@v1.36.12 (LICENSE)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2018 The Go Authors. All rights reserved.
@@ -3265,7 +3265,7 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 text 8108e14b5cb2 — applies to:
-    github.com/felixge/httpsnoop@v1.0.4 (LICENSE.txt)
+    github.com/felixge/httpsnoop@v1.1.0 (LICENSE.txt)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2016 Felix Geisendörfer (felix@debuggable.com)
@@ -3548,8 +3548,53 @@ text 8c6db3404751 — applies to:
    limitations under the License.
 
 ------------------------------------------------------------------------------
+text 9d5bd59fec68 — applies to:
+    github.com/go-openapi/jsonreference@v1.0.0 (NOTICE)
+------------------------------------------------------------------------------
+
+Copyright 2015-2025 go-swagger maintainers
+
+// SPDX-FileCopyrightText: Copyright 2015-2025 go-swagger maintainers
+// SPDX-License-Identifier: Apache-2.0
+
+This software library, github.com/go-openapi/jsonreference, includes software developed
+by the go-swagger and go-openapi maintainers ("go-swagger maintainers").
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this software except in compliance with the License.
+
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0.
+
+This software is copied from, derived from, and inspired by other original software products.
+It ships with copies of other software which license terms are recalled below.
+
+The original software was authored on 25-02-2013 by sigu-399 (https://github.com/sigu-399, sigu.399@gmail.com).
+
+github.com/sigh-399/jsonreference
+===========================
+
+// SPDX-FileCopyrightText: Copyright 2013 sigu-399 ( https://github.com/sigu-399 )
+// SPDX-License-Identifier: Apache-2.0
+
+Copyright 2013 sigu-399 ( https://github.com/sigu-399 )
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+------------------------------------------------------------------------------
 text a15b1d1b1689 — applies to:
-    github.com/grpc-ecosystem/grpc-gateway/v2@v2.27.7 (LICENSE)
+    github.com/grpc-ecosystem/grpc-gateway/v2@v2.30.0 (LICENSE)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2015, Gengo, Inc.
