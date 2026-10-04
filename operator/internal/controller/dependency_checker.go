@@ -6,6 +6,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,12 +67,6 @@ var gpuOperandRequirements = []gpuOperandRequirement{
 	},
 }
 
-var clusterPolicyGVK = schema.GroupVersionKind{
-	Group:   "nvidia.com",
-	Version: "v1",
-	Kind:    "ClusterPolicy",
-}
-
 var clusterServiceVersionGVK = schema.GroupVersionKind{
 	Group:   "operators.coreos.com",
 	Version: "v1alpha1",
@@ -90,22 +85,34 @@ type GpuOperatorDependencyChecker struct {
 	// verification only: it does not make an unsupported GPU stack work.
 	// ClusterPolicy readiness is still checked.
 	skipVersionChecks bool
+
+	// namespace is where the daemon pods run, needed to check them against the
+	// toolkit's management CDI device allowlist. It is fixed at install time,
+	// so it is held here rather than threaded through Check.
+	namespace string
 }
 
-func NewGpuOperatorDependencyChecker(reader client.Reader, skipVersionChecks bool) GpuOperatorDependencyChecker {
-	return GpuOperatorDependencyChecker{reader: reader, skipVersionChecks: skipVersionChecks}
+func NewGpuOperatorDependencyChecker(reader client.Reader, skipVersionChecks bool, namespace string) GpuOperatorDependencyChecker {
+	return GpuOperatorDependencyChecker{reader: reader, skipVersionChecks: skipVersionChecks, namespace: namespace}
 }
 
-func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha1.GpuFractioningConfig, ready metav1.Condition) (metav1.Condition, error) {
-	clusterPolicy, err := c.clusterPolicy(ctx)
-	if err != nil {
+// Check evaluates the GPU Operator dependency against the aggregate Ready
+// condition.
+//
+// It takes the ClusterPolicy rather than reading it: the DaemonSet builders need
+// the same object earlier in the reconcile (to decide how GPUs are injected into
+// the daemon pods), so it is read once per reconcile and shared. See
+// ClusterPolicy.
+func (c GpuOperatorDependencyChecker) Check(ctx context.Context, clusterPolicy ClusterPolicy, config *v1alpha1.GpuFractioningConfig, ready metav1.Condition) (metav1.Condition, error) {
+	if clusterPolicy.Err != nil {
 		if ctx.Err() != nil {
-			return ready, err
+			return ready, clusterPolicy.Err
 		}
 		return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorNotReady,
-			fmt.Sprintf("unable to read NVIDIA GPU Operator ClusterPolicy: %v", err)), nil
+			fmt.Sprintf("unable to read NVIDIA GPU Operator ClusterPolicy: %v", clusterPolicy.Err)), nil
 	}
-	reason, message, err := c.versionFailure(ctx, clusterPolicy)
+	policy := clusterPolicy.Policy
+	reason, message, err := c.versionFailure(ctx, policy)
 	if err != nil {
 		return ready, err
 	}
@@ -113,7 +120,7 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 		return gpuOperatorReadyCondition(config.Generation, reason, message), nil
 	}
 
-	if clusterPolicy == nil {
+	if policy == nil {
 		// The OLM ClusterServiceVersion carries no operand or readiness state,
 		// so the version gate above is all this path can check. Treat the GPU
 		// Operator dependency as not the cause of the current
@@ -121,13 +128,47 @@ func (c GpuOperatorDependencyChecker) Check(ctx context.Context, config *v1alpha
 		return ready, nil
 	}
 
+	if msg := c.managementCDINamespaceFailureMessage(clusterPolicy); msg != "" {
+		return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonManagementCDINamespaceNotAllowed, msg), nil
+	}
+
 	if ready.Status == metav1.ConditionFalse {
-		if msg := clusterPolicyReadinessFailureMessage(clusterPolicy); msg != "" {
+		if msg := clusterPolicyReadinessFailureMessage(policy); msg != "" {
 			return gpuOperatorReadyCondition(config.Generation, daemonmgr.ReasonGPUOperatorNotReady, msg), nil
 		}
 	}
 
 	return ready, nil
+}
+
+// managementCDINamespaceFailureMessage reports that our daemon pods request a
+// management CDI device from a namespace the NVIDIA Container Toolkit does not
+// permit, and returns empty when they do not or when it does.
+//
+// This only applies in NRI mode, where the daemons have no RuntimeClass to fall
+// back on: the toolkit refuses the device and the pod never starts. It is
+// reported rather than worked around because extending the allowlist is an
+// admin action on the ClusterPolicy. Without this the failure is exactly the
+// silent breakage this NRI support exists to fix.
+//
+// Known false positive: the toolkit also permits its own namespace implicitly,
+// which is not in the allowlist and is not derivable from the (cluster-scoped)
+// ClusterPolicy. Installing gpu-fractioning into the GPU Operator's namespace
+// therefore reports a problem that does not exist. Adding the namespace to the
+// allowlist anyway is harmless and clears the report, whereas staying silent
+// would reproduce the original bug.
+func (c GpuOperatorDependencyChecker) managementCDINamespaceFailureMessage(clusterPolicy ClusterPolicy) string {
+	if !clusterPolicy.NRIPluginEnabled() {
+		return ""
+	}
+	if slices.Contains(clusterPolicy.ManagementCDIDeviceNamespaces(), c.namespace) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"NVIDIA GPU Operator runs its NRI plugin, but namespace %q is not permitted to request management CDI devices, "+
+			"so the gpu-fractioning daemon pods cannot access a GPU. Add it to the %s environment variable in the "+
+			"ClusterPolicy spec.toolkit.env.",
+		c.namespace, nriManagementCDIDeviceNamespacesEnv)
 }
 
 // versionFailure evaluates the GPU stack version gates and returns the Ready
@@ -221,23 +262,6 @@ func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, 
 		condition.Message = driverMessage
 	}
 	return condition, nil
-}
-
-func (c GpuOperatorDependencyChecker) clusterPolicy(ctx context.Context) (*unstructured.Unstructured, error) {
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(clusterPolicyGVK.GroupVersion().WithKind(clusterPolicyGVK.Kind + "List"))
-
-	if err := c.reader.List(ctx, list); err != nil {
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	if len(list.Items) == 0 {
-		return nil, nil
-	}
-	return &list.Items[0], nil
 }
 
 func (c GpuOperatorDependencyChecker) clusterServiceVersionGPUOperatorVersion(ctx context.Context) (version string, found bool, err error) {

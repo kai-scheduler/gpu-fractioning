@@ -60,13 +60,14 @@ type ManagedDaemon interface {
 
 // BuildOptions carries the context needed by ManagedDaemon.BuildDaemonSet.
 type BuildOptions struct {
-	Namespace          string               // namespace for the DaemonSet
-	NodeSelector       map[string]string    // selects which nodes the daemon targets
-	Tolerations        []corev1.Toleration  // taints on the targeted nodes the daemon pods tolerate
-	ServiceAccountName string               // service account for daemon pods that need API access
-	RuntimeClassName   *string              // resolved RuntimeClass for daemon pods that need NVIDIA GPU/NVML access
-	DefaultImages      map[string]ImageSpec // Helm-injected default images keyed by daemon name
-	FIPSOnly           bool                 // Helm-injected: run daemon containers with FIPS-only enforcement. See FIPSOnlyEnv.
+	Namespace           string               // namespace for the DaemonSet
+	NodeSelector        map[string]string    // selects which nodes the daemon targets
+	Tolerations         []corev1.Toleration  // taints on the targeted nodes the daemon pods tolerate
+	ServiceAccountName  string               // service account for daemon pods that need API access
+	RuntimeClassName    *string              // resolved RuntimeClass for daemon pods that need NVIDIA GPU/NVML access
+	DefaultImages       map[string]ImageSpec // Helm-injected default images keyed by daemon name
+	FIPSOnly            bool                 // Helm-injected: run daemon containers with FIPS-only enforcement. See FIPSOnlyEnv.
+	ManagementCDIDevice string               // NRI-mode counterpart of RuntimeClassName, where no RuntimeClass exists; empty otherwise. See SetManagementCDIDevice.
 }
 
 // ResolveRuntimeClassName returns the RuntimeClass to set on daemon pods that

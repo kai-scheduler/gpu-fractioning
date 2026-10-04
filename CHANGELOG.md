@@ -7,6 +7,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- The node daemons now get their GPU where the NVIDIA GPU Operator runs its own
+  NRI plugin (`cdi.nriPluginEnabled=true`), which deletes the `nvidia`
+  RuntimeClass they depended on and left mpsd crash-looping on
+  `initialize NVML: ERROR_LIBRARY_NOT_FOUND` with metricsd silently reporting
+  zero for every GPU metric. The operator reads `spec.cdi.nriPluginEnabled` from
+  the `ClusterPolicy` and, when set, stops putting `runtimeClassName` on the
+  mpsd and fractiond pods — including over an explicit `runtimeClassName`, since
+  a deleted RuntimeClass cannot be honoured; the override is logged rather than
+  silently dropped — and annotates them
+  `nvidia.cdi.k8s.io/container.<container>: management.nvidia.com/gpu=all`
+  instead, which is how the toolkit's NRI plugin grants the same GPU access the
+  GPU Operator gives its own management containers. The annotation is merged
+  into the pod template rather than assigned, so fractiond keeps its
+  `prometheus.io/*` scrape configuration. Behaviour is unchanged wherever the
+  NRI plugin is off.
+  **This covers the daemons only. Fractional workloads still do not get a GPU
+  under the NRI plugin** — they do not request the `nvidia.com/gpu` resource, so
+  the device plugin skips them and their GPU comes from fractiond injecting
+  `NVIDIA_VISIBLE_DEVICES`, which only `nvidia-container-runtime` reads and
+  which the NRI path does not involve. Do not enable the NRI plugin on a cluster
+  running fractional workloads.
+- New `Ready` condition reason `ManagementCDINamespaceNotAllowed`, reported when
+  the GPU Operator runs its NRI plugin but the container toolkit does not permit
+  the gpu-fractioning namespace to request management CDI devices. The toolkit
+  allowlists namespaces through `NRI_MANAGEMENT_CDI_DEVICE_NAMESPACES` in the
+  `ClusterPolicy` `spec.toolkit.env`, permits its own namespace implicitly, and
+  enforces the list by *omitting* the device rather than failing container
+  creation — so without this the daemons start, get no GPU, and nothing says so:
+  mpsd crash-loops on an NVML error and metricsd passes its probes while every
+  GPU metric reads zero. The message names the namespace and the variable to
+  set. Known false positive: an installation in the GPU Operator's own namespace
+  reports it, because the implicit permission is not derivable from the
+  cluster-scoped `ClusterPolicy`; the message still points at a real mechanism,
+  which is preferable to the silence it replaces.
 - CNCF project-repository requirements, ahead of making the repository public in
   the `kai-scheduler` organization: `GOVERNANCE.md` (this repository's own
   governance — its maintainers, decision making, and how that group changes),

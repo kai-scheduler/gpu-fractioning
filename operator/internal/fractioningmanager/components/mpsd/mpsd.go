@@ -74,6 +74,10 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 	result.Spec.Template.Spec.Tolerations = opts.Tolerations
 	result.Spec.Template.Spec.ServiceAccountName = opts.ServiceAccountName
 	result.Spec.Template.Spec.RuntimeClassName = opts.RuntimeClassName
+	// Under the GPU Operator's NRI plugin there is no RuntimeClass to opt into,
+	// so the GPU arrives as a CDI device requested by annotation instead. No-op
+	// otherwise.
+	daemonmgr.SetManagementCDIDevice(&result.Spec.Template.ObjectMeta, daemonName, opts.ManagementCDIDevice)
 	// HostPID is required for memacct to enforce GPU memory limits. The control
 	// daemon identifies each client by the PID in the connecting socket's peer
 	// credentials, and the kernel only translates a peer PID for a namespace it

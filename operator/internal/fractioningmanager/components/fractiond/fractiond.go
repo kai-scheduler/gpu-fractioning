@@ -164,6 +164,12 @@ func (d *daemon) applyMetricsSidecar(result *appsv1.DaemonSet, opts daemonmgr.Bu
 	result.Spec.Template.Annotations["prometheus.io/scrape"] = "true"
 	result.Spec.Template.Annotations["prometheus.io/port"] = d.metricsAnnotationPort()
 	result.Spec.Template.Annotations["prometheus.io/path"] = d.metricsAnnotationPath()
+
+	// metricsd is the only container in this pod that touches the GPU, and under
+	// the GPU Operator's NRI plugin there is no RuntimeClass to opt into: the GPU
+	// arrives as a CDI device requested by annotation. Scoped to metricsd for the
+	// same reason RuntimeClassName is only set when it runs. No-op otherwise.
+	daemonmgr.SetManagementCDIDevice(&result.Spec.Template.ObjectMeta, metricsdName, opts.ManagementCDIDevice)
 }
 
 // metricsListenPort returns the TCP port metricsd actually listens on: the port

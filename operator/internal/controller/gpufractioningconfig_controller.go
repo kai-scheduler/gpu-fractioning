@@ -140,7 +140,7 @@ func NewGpuFractioningConfigReconciler(
 		SupportSMSharing:          supportSMSharing,
 		FIPSOnly:                  fipsOnly,
 		SkipGpuStackVersionChecks: skipGpuStackVersionChecks,
-		GpuOperatorChecker:        NewGpuOperatorDependencyChecker(apiReader, skipGpuStackVersionChecks),
+		GpuOperatorChecker:        NewGpuOperatorDependencyChecker(apiReader, skipGpuStackVersionChecks, namespace),
 		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader),
 	}
 }
@@ -184,11 +184,16 @@ func (r *GpuFractioningConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// controller stays stateless across restarts and leader elections.
 	wasUnhealthy := !isConditionTrue(config.Status.Conditions, daemonmgr.ConditionReady)
 
+	// Read the GPU Operator ClusterPolicy once. Both the DaemonSet builders
+	// below and the dependency check further down need it, so it is fetched
+	// here and shared rather than read twice per reconcile.
+	clusterPolicy := ReadClusterPolicy(ctx, r.APIReader)
+
 	// Reconcile each managed daemon and collect health + conditions.
 	var needsRequeue bool
 	daemons := buildDaemons(&config.Spec, r.MpsdAuditLog, r.SupportSMSharing)
 
-	opts := r.buildOptions(&config)
+	opts := r.buildOptions(ctx, &config, clusterPolicy)
 	for _, daemon := range daemons {
 
 		health, reconcileErr := daemonmgr.ReconcileDaemon(ctx, r.Client, r.Scheme, &config, daemon, opts)
@@ -209,7 +214,7 @@ func (r *GpuFractioningConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// Aggregate Ready condition.
 	readyCond := daemonmgr.AggregateReadyCondition(config.Status.Conditions, config.Generation)
-	readyCond, err := r.GpuOperatorChecker.Check(ctx, &config, readyCond)
+	readyCond, err := r.GpuOperatorChecker.Check(ctx, clusterPolicy, &config, readyCond)
 	if err != nil {
 		r.Recorder.Eventf(&config, corev1.EventTypeWarning, "DependencyCheckError", "%v", err)
 		log.Error(err, "failed to check GPU stack dependencies")
@@ -307,8 +312,13 @@ func (r *GpuFractioningConfigReconciler) evaluateDriverUpgrade(ctx context.Conte
 // buildOptions resolves the BuildOptions shared by all daemons. DefaultImages
 // contains the Helm-injected defaults; each daemon's BuildDaemonSet merges its
 // own CRD overrides internally.
-func (r *GpuFractioningConfigReconciler) buildOptions(config *v1alpha1.GpuFractioningConfig) daemonmgr.BuildOptions {
-	return daemonmgr.BuildOptions{
+//
+// It also resolves how GPUs reach the daemon containers, which is the one
+// decision the builders must not make for themselves: the GPU Operator deletes
+// the nvidia RuntimeClass when it runs its NRI plugin, so the daemons request a
+// management CDI device by annotation instead.
+func (r *GpuFractioningConfigReconciler) buildOptions(ctx context.Context, config *v1alpha1.GpuFractioningConfig, clusterPolicy ClusterPolicy) daemonmgr.BuildOptions {
+	opts := daemonmgr.BuildOptions{
 		Namespace:          r.Namespace,
 		NodeSelector:       config.Spec.NodeSelector,
 		Tolerations:        config.Spec.Tolerations,
@@ -317,6 +327,20 @@ func (r *GpuFractioningConfigReconciler) buildOptions(config *v1alpha1.GpuFracti
 		DefaultImages:      r.DefaultImages,
 		FIPSOnly:           r.FIPSOnly,
 	}
+
+	if clusterPolicy.NRIPluginEnabled() {
+		// A RuntimeClass the GPU Operator has deleted cannot be honoured, so NRI
+		// mode wins even over an explicit spec.runtimeClassName. Log it so the
+		// override is visible rather than silently ignored.
+		if opts.RuntimeClassName != nil {
+			logf.FromContext(ctx).Info("GPU Operator NRI plugin is enabled, ignoring runtimeClassName and requesting a management CDI device instead",
+				"runtimeClassName", *opts.RuntimeClassName, "managementCDIDevice", daemonmgr.ManagementCDIDeviceAll)
+		}
+		opts.RuntimeClassName = nil
+		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+	}
+
+	return opts
 }
 
 // reconcileDelete handles a GpuFractioningConfig with a non-zero deletionTimestamp:

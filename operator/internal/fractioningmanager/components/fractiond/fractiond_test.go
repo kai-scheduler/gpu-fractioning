@@ -269,6 +269,68 @@ func TestDaemon_BuildDaemonSet_MetricsRuntimeClassEmpty(t *testing.T) {
 	}
 }
 
+// Under the GPU Operator's NRI plugin the nvidia RuntimeClass is deleted, so
+// metricsd's NVML access has to come from a CDI device requested by annotation
+// instead. It is scoped to metricsd for the same reason the RuntimeClass is:
+// fractiond itself never touches the GPU.
+func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
+	const annotation = "nvidia.cdi.k8s.io/container.metricsd"
+
+	t.Run("nri mode annotates metricsd and sets no runtime class", func(t *testing.T) {
+		opts := defaultOpts()
+		opts.RuntimeClassName = nil
+		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+
+		tmpl := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: true}, testSupportSMSharingTrue).
+			BuildDaemonSet(opts).Spec.Template
+
+		if tmpl.Spec.RuntimeClassName != nil {
+			t.Errorf("runtimeClassName = %q, expected nil in NRI mode", *tmpl.Spec.RuntimeClassName)
+		}
+		if got := tmpl.Annotations[annotation]; got != daemonmgr.ManagementCDIDeviceAll {
+			t.Errorf("%s = %q, expected %q", annotation, got, daemonmgr.ManagementCDIDeviceAll)
+		}
+
+		// The CDI annotation shares the map with the scrape config, so a merge
+		// bug here silently stops Prometheus collecting GPU metrics.
+		for key, want := range map[string]string{
+			"prometheus.io/scrape": "true",
+			"prometheus.io/port":   "2112",
+			"prometheus.io/path":   "/metrics",
+		} {
+			if got := tmpl.Annotations[key]; got != want {
+				t.Errorf("%s = %q, expected %q", key, got, want)
+			}
+		}
+	})
+
+	t.Run("runtime class mode sets no annotation", func(t *testing.T) {
+		tmpl := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: true}, testSupportSMSharingTrue).
+			BuildDaemonSet(defaultOpts()).Spec.Template
+
+		if _, found := tmpl.Annotations[annotation]; found {
+			t.Errorf("%s set outside NRI mode", annotation)
+		}
+	})
+
+	// fractiond alone needs no GPU, so it gets neither mechanism.
+	t.Run("metrics disabled gets neither", func(t *testing.T) {
+		opts := defaultOpts()
+		opts.RuntimeClassName = nil
+		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+
+		tmpl := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: false}, testSupportSMSharingTrue).
+			BuildDaemonSet(opts).Spec.Template
+
+		if tmpl.Spec.RuntimeClassName != nil {
+			t.Errorf("runtimeClassName = %q, expected nil", *tmpl.Spec.RuntimeClassName)
+		}
+		if _, found := tmpl.Annotations[annotation]; found {
+			t.Errorf("%s set when metricsd does not run", annotation)
+		}
+	})
+}
+
 func TestDaemon_BuildDaemonSet_MetricsDisabled(t *testing.T) {
 	d := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: false}, testSupportSMSharingTrue)
 

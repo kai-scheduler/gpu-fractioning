@@ -47,7 +47,7 @@ It is designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler
 
 - Kubernetes 1.28+
 - containerd 2.0+ with **NRI enabled**, or CRI-O with NRI support
-- [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) **v26.7.0 or newer**, which provides the default `nvidia` [RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/) for daemon GPU/NVML access, running a **container toolkit v1.20.1 or newer** and a **device plugin v0.20.1 or newer** — see below
+- [NVIDIA GPU Operator](https://github.com/NVIDIA/gpu-operator) **v26.7.0 or newer**, which provides the default `nvidia` [RuntimeClass](https://kubernetes.io/docs/concepts/containers/runtime-class/) for daemon GPU/NVML access, running a **container toolkit v1.20.1 or newer** and a **device plugin v0.20.1 or newer** — see below. Running the GPU Operator with its own NRI plugin (`cdi.nriPluginEnabled=true`) removes that RuntimeClass and is **not yet fully supported** — see below
 - **NVIDIA driver `r615` or newer (CUDA 13.4)** on the GPU nodes — see below, this is *not* the GPU Operator default
 - A scheduler that assigns fractional GPUs — designed to run alongside [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler)
 
@@ -110,6 +110,31 @@ kubectl get clusterpolicy -o jsonpath='{.items[0].spec.toolkit.version}{"\n"}{.i
 
 If a GPU node ends up on an older driver, the `GpuFractioningConfig` `Ready` condition reports it (`GPUDriverVersionUnsupported`) and the node-level daemons are not rolled out there.
 
+### Running the GPU Operator with its NRI plugin
+
+Setting `cdi.nriPluginEnabled=true` on the GPU Operator makes it deliver GPUs through its own NRI plugin, and **deletes the `nvidia` RuntimeClass** as part of that switch. Anything that reached the GPU through that RuntimeClass loses access, with no event and no error on the pod.
+
+> **Not yet fully supported.** The gpu-fractioning daemons work in this mode, but **fractional workloads do not get a GPU**. Do not enable it on a cluster running fractional workloads.
+
+The daemons adapt automatically. When the operator sees `spec.cdi.nriPluginEnabled: true` on the `ClusterPolicy` it stops setting `runtimeClassName` on the mpsd and fractiond pods — including when `runtimeClassName` is set explicitly, since a deleted RuntimeClass cannot be honoured, which is logged — and instead annotates them to request the GPU Operator's management CDI device:
+
+```
+nvidia.cdi.k8s.io/container.<container>: management.nvidia.com/gpu=all
+```
+
+That device is allowlisted by namespace. The container toolkit permits its own namespace implicitly and nothing else, so a gpu-fractioning installed anywhere other than the GPU Operator's namespace needs an administrator to extend the list:
+
+```sh
+kubectl patch clusterpolicies.nvidia.com/cluster-policy --type=json \
+  -p='[{"op":"add","path":"/spec/toolkit/env/-","value":{"name":"NRI_MANAGEMENT_CDI_DEVICE_NAMESPACES","value":"gpu-fractioning"}}]'
+```
+
+Until that is done the daemon pods start normally and are simply given no GPU — the toolkit omits the device rather than failing container creation. mpsd then fails loudly (`initialize NVML: ERROR_LIBRARY_NOT_FOUND`), but metricsd degrades silently: it logs a warning, serves `/metrics` with every GPU value at zero, and passes its probes, so `fractiond` reports Ready while reporting nothing. The `Ready` condition is the only reliable signal, and reports this as `ManagementCDINamespaceNotAllowed` with the namespace and variable to set.
+
+One false positive is known and accepted: installing gpu-fractioning *into* the GPU Operator's own namespace reports this condition even though the toolkit permits that namespace implicitly. The allowlist is the only thing readable from the (cluster-scoped) `ClusterPolicy`, and a message pointing at a real mechanism is preferable to the silence it replaces.
+
+**The workload gap.** A fractional container deliberately does not request the `nvidia.com/gpu` resource, so the NVIDIA device plugin skips it and its GPU comes from fractiond injecting `NVIDIA_VISIBLE_DEVICES` — which only has an effect because `nvidia-container-runtime` reads it, and that runtime is selected by the `nvidia` RuntimeClass. Under the NRI plugin nothing reads it (the CDI spec even sets it to `void`), so the container starts without a GPU and fails at its first CUDA call. Ordinary pods requesting `nvidia.com/gpu` are unaffected.
+
 ## Install
 
 The operator and its Helm chart are published as OCI artifacts to GitHub Container Registry.
@@ -132,7 +157,7 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 
 | Value | Default | Purpose |
 |-------|---------|---------|
-| `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access |
+| `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access. Ignored where the GPU Operator runs its NRI plugin, which deletes the RuntimeClass — see [above](#running-the-gpu-operator-with-its-nri-plugin) |
 | `supportSmSharing` | `true` | installation-time toggle for the `sm-sharing` compute mode (mpsd's shared MPS server + fractiond's routing to it); disable it to revert to pre-feature behaviour without a code rollback, and the `gpu-compute.mode: sm-sharing` annotation is rejected like any other invalid value. Applies to containers created afterwards — stop sm-sharing workloads and drain the shared server before disabling |
 | `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates (GPU Operator, container toolkit, device plugin) when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
 | `crdUpgrader.enabled` | `true` | run the `pre-install`/`pre-upgrade` hook Job that applies the `GpuFractioningConfig` CRD, which is how a schema change reaches an existing install — Helm does not update a chart's `crds/` on upgrade. Disable only if you apply the CRD yourself; see [Upgrading](#upgrading) |
@@ -208,7 +233,7 @@ spec:
 - **Both `request` and `limit` are optional**, but at least one must be present for the container to be treated as a shared-GPU container. If only one is set, the other defaults to it — so a request-only container is capped at its request rather than left unbounded, and a limit-only container gets its request populated for accounting.
 - **limit** is the hard memory cap the driver enforces. **request** is the workload's declared share; the GPU fraction used to normalize SM-utilization metrics is derived from the limit, falling back to the request.
 - Values are Kubernetes quantities (`8Gi`, `512Mi`, `1G`, …) and must resolve to at least 1 MiB. fractiond normalizes them to the integer MiB values consumed by NVIDIA memory env vars (`1000Mi` -> `1000`, `1000M` -> `954`). A malformed value fails container creation unless fractiond is running fail-open.
-- The GPU **device assignment** (`nvidia.com/container.<name>.gpus.devices`) is set by the scheduler (KAI Scheduler); fractiond injects `NVIDIA_VISIBLE_DEVICES` from it.
+- The GPU **device assignment** (`nvidia.com/container.<name>.gpus.devices`) is set by the scheduler (KAI Scheduler); fractiond injects `NVIDIA_VISIBLE_DEVICES` from it. This is the step that does not work where the GPU Operator runs its NRI plugin — see [above](#running-the-gpu-operator-with-its-nri-plugin).
 
 ### Selecting a compute-sharing mode
 

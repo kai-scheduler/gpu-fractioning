@@ -400,9 +400,10 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 				WithScheme(clusterPolicyScheme(t)).
 				WithObjects(tt.objects...).
 				Build()
-			checker := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks)
+			checker := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks, testCheckerNamespace)
 
-			got, err := checker.Check(context.Background(), config, tt.input)
+			ctx := context.Background()
+			got, err := checker.Check(ctx, ReadClusterPolicy(ctx, reader), config, tt.input)
 			if err != nil {
 				t.Fatalf("Check returned error: %v", err)
 			}
@@ -414,6 +415,96 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			}
 			if !strings.Contains(got.Message, tt.expectedMessage) {
 				t.Fatalf("Message = %q, expected to contain %q", got.Message, tt.expectedMessage)
+			}
+		})
+	}
+}
+
+// In NRI mode the daemons have no RuntimeClass to fall back on: if the toolkit
+// will not hand our namespace a management CDI device, the pods never start.
+// Reporting that is the difference between an actionable condition and the
+// silent breakage NRI support exists to fix.
+func TestGpuOperatorDependencyChecker_ManagementCDINamespace(t *testing.T) {
+	ready := metav1.Condition{
+		Type:               daemonmgr.ConditionReady,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: 7,
+		Reason:             daemonmgr.ReasonAllComponentsReady,
+		Message:            daemonmgr.MessageAllComponentsReady,
+	}
+	config := &v1alpha1.GpuFractioningConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
+	}
+
+	tests := []struct {
+		name           string
+		nriEnabled     bool
+		allowlist      string
+		expectedReason string
+	}{
+		{
+			name:           "nri enabled and namespace not allowlisted",
+			nriEnabled:     true,
+			expectedReason: daemonmgr.ReasonManagementCDINamespaceNotAllowed,
+		},
+		{
+			name:           "nri enabled and a different namespace allowlisted",
+			nriEnabled:     true,
+			allowlist:      "some-other-namespace",
+			expectedReason: daemonmgr.ReasonManagementCDINamespaceNotAllowed,
+		},
+		{
+			name:           "nri enabled and namespace allowlisted",
+			nriEnabled:     true,
+			allowlist:      "some-other-namespace," + testCheckerNamespace,
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+		{
+			// Without the NRI plugin the daemons use the RuntimeClass, so the
+			// allowlist is irrelevant and must never gate Ready.
+			name:           "nri disabled leaves the allowlist irrelevant",
+			expectedReason: daemonmgr.ReasonAllComponentsReady,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := clusterPolicyOperandObject("v26.7.1", supportedToolkitVersion, supportedDevicePluginVersion)
+			spec, _ := policy.Object["spec"].(map[string]any)
+			spec["cdi"] = map[string]any{"nriPluginEnabled": tt.nriEnabled}
+			if tt.allowlist != "" {
+				toolkit, _ := spec["toolkit"].(map[string]any)
+				toolkit["env"] = []any{
+					map[string]any{"name": nriManagementCDIDeviceNamespacesEnv, "value": tt.allowlist},
+				}
+			}
+
+			reader := fake.NewClientBuilder().
+				WithScheme(clusterPolicyScheme(t)).
+				WithObjects(policy).
+				Build()
+
+			ctx := context.Background()
+			got, err := NewGpuOperatorDependencyChecker(reader, false, testCheckerNamespace).
+				Check(ctx, ReadClusterPolicy(ctx, reader), config, ready)
+			if err != nil {
+				t.Fatalf("Check returned error: %v", err)
+			}
+			if got.Reason != tt.expectedReason {
+				t.Fatalf("Reason = %q, expected %q", got.Reason, tt.expectedReason)
+			}
+			if tt.expectedReason != daemonmgr.ReasonManagementCDINamespaceNotAllowed {
+				return
+			}
+			if got.Status != metav1.ConditionFalse {
+				t.Fatalf("Status = %s, expected False", got.Status)
+			}
+			// The message has to name the namespace and the variable to set, or
+			// it tells an admin nothing they can act on.
+			for _, want := range []string{testCheckerNamespace, nriManagementCDIDeviceNamespacesEnv, "spec.toolkit.env"} {
+				if !strings.Contains(got.Message, want) {
+					t.Errorf("Message = %q, expected to contain %q", got.Message, want)
+				}
 			}
 		})
 	}
@@ -431,7 +522,9 @@ func TestGpuOperatorDependencyChecker_ToleratesMissingDependencyAPIs(t *testing.
 		ObjectMeta: metav1.ObjectMeta{Name: "default", Generation: 7},
 	}
 
-	got, err := NewGpuOperatorDependencyChecker(missingDependencyAPIReader{}, false).Check(context.Background(), config, ready)
+	ctx := context.Background()
+	reader := missingDependencyAPIReader{}
+	got, err := NewGpuOperatorDependencyChecker(reader, false, testCheckerNamespace).Check(ctx, ReadClusterPolicy(ctx, reader), config, ready)
 	if err != nil {
 		t.Fatalf("Check returned error: %v", err)
 	}
@@ -483,7 +576,8 @@ func TestGpuOperatorDependencyChecker_ClusterServiceVersionListError(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			reader := clusterServiceVersionErrorReader{}
-			got, err := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks).Check(context.Background(), config, ready)
+			ctx := context.Background()
+			got, err := NewGpuOperatorDependencyChecker(reader, tt.skipVersionChecks, testCheckerNamespace).Check(ctx, ReadClusterPolicy(ctx, reader), config, ready)
 			if err != nil {
 				t.Fatalf("Check returned error: %v", err)
 			}
@@ -736,6 +830,10 @@ func TestNormalizeGPUOperatorVersion(t *testing.T) {
 		})
 	}
 }
+
+// testCheckerNamespace is the namespace the daemon pods run in, as far as the
+// checker is concerned. It only matters to the management CDI device allowlist.
+const testCheckerNamespace = "gpu-fractioning"
 
 func clusterPolicyScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()

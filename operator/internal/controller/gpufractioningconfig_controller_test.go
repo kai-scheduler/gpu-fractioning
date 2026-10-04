@@ -13,9 +13,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -91,12 +93,12 @@ func TestBuildOptionsPropagatesTolerations(t *testing.T) {
 	}
 	r := &GpuFractioningConfigReconciler{}
 
-	opts := r.buildOptions(&gpufractioningv1alpha1.GpuFractioningConfig{
+	opts := r.buildOptions(context.Background(), &gpufractioningv1alpha1.GpuFractioningConfig{
 		Spec: gpufractioningv1alpha1.GpuFractioningConfigSpec{
 			NodeSelector: map[string]string{"nvidia.com/gpu.present": "true"},
 			Tolerations:  tolerations,
 		},
-	})
+	}, ClusterPolicy{})
 
 	if len(opts.Tolerations) != 1 || opts.Tolerations[0] != tolerations[0] {
 		t.Errorf("Tolerations = %v, want %v", opts.Tolerations, tolerations)
@@ -137,6 +139,84 @@ func TestGpuOperatorDependencyGVKExists(t *testing.T) {
 	}
 }
 
+// The GPU Operator deletes the nvidia RuntimeClass when it runs its NRI plugin,
+// so the reconciler resolves which GPU injection mechanism the daemons get. The
+// two are mutually exclusive: shipping both, or neither, leaves a daemon pod
+// that either cannot be admitted or comes up without a GPU.
+func TestBuildOptionsResolvesGpuInjection(t *testing.T) {
+	nriEnabled := clusterPolicyWithSpec(map[string]any{"cdi": map[string]any{"nriPluginEnabled": true}})
+	nriDisabled := clusterPolicyWithSpec(map[string]any{"cdi": map[string]any{"nriPluginEnabled": false}})
+
+	tests := []struct {
+		name                string
+		clusterPolicy       ClusterPolicy
+		specRuntimeClass    *string
+		expectRuntimeClass  *string
+		expectManagementCDI string
+	}{
+		{
+			name:               "runtime class mode is unchanged",
+			clusterPolicy:      nriDisabled,
+			expectRuntimeClass: ptr.To(daemonmgr.DefaultRuntimeClassName),
+		},
+		{
+			name:               "no cluster policy keeps the runtime class",
+			expectRuntimeClass: ptr.To(daemonmgr.DefaultRuntimeClassName),
+		},
+		{
+			name:                "nri mode drops the runtime class for a CDI device",
+			clusterPolicy:       nriEnabled,
+			expectManagementCDI: daemonmgr.ManagementCDIDeviceAll,
+		},
+		{
+			// A RuntimeClass the GPU Operator has deleted cannot be honoured,
+			// so NRI wins even when the CR names one explicitly.
+			name:                "nri mode overrides an explicit runtimeClassName",
+			clusterPolicy:       nriEnabled,
+			specRuntimeClass:    ptr.To("custom-nvidia"),
+			expectManagementCDI: daemonmgr.ManagementCDIDeviceAll,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &GpuFractioningConfigReconciler{Namespace: "gpu-fractioning"}
+			config := &gpufractioningv1alpha1.GpuFractioningConfig{
+				Spec: gpufractioningv1alpha1.GpuFractioningConfigSpec{RuntimeClassName: tt.specRuntimeClass},
+			}
+
+			opts := r.buildOptions(context.Background(), config, tt.clusterPolicy)
+
+			if tt.expectRuntimeClass == nil {
+				if opts.RuntimeClassName != nil {
+					t.Fatalf("RuntimeClassName = %q, expected nil", *opts.RuntimeClassName)
+				}
+			} else if opts.RuntimeClassName == nil || *opts.RuntimeClassName != *tt.expectRuntimeClass {
+				t.Fatalf("RuntimeClassName = %v, expected %q", opts.RuntimeClassName, *tt.expectRuntimeClass)
+			}
+			if opts.ManagementCDIDevice != tt.expectManagementCDI {
+				t.Fatalf("ManagementCDIDevice = %q, expected %q", opts.ManagementCDIDevice, tt.expectManagementCDI)
+			}
+
+			// The decision is only worth anything if it survives into the
+			// rendered DaemonSets, which is what the daemons actually run with.
+			for _, daemon := range buildDaemons(&config.Spec, testMpsdAuditLogTrue, testSupportSMSharingTrue) {
+				if daemon.Name() != "mpsd" {
+					continue
+				}
+				tmpl := daemon.BuildDaemonSet(opts).Spec.Template
+				gotCDI := tmpl.Annotations["nvidia.cdi.k8s.io/container.mpsd"]
+				if gotCDI != tt.expectManagementCDI {
+					t.Errorf("rendered mpsd CDI annotation = %q, expected %q", gotCDI, tt.expectManagementCDI)
+				}
+				if (tmpl.Spec.RuntimeClassName == nil) != (tt.expectRuntimeClass == nil) {
+					t.Errorf("rendered mpsd runtimeClassName = %v, expected nil == %t", tmpl.Spec.RuntimeClassName, tt.expectRuntimeClass == nil)
+				}
+			}
+		})
+	}
+}
+
 // Operand versions at and below their floors, used to drive the GPU Operator
 // dependency checker in the specs below.
 const (
@@ -145,18 +225,44 @@ const (
 	oldToolkitVersion            = "v1.20.0-ubuntu20.04"
 )
 
-func gpuOperatorCheckerWithSupportedOperands() GpuOperatorDependencyChecker {
-	return newGpuOperatorChecker(supportedToolkitVersion, supportedDevicePluginVersion, false)
+// clusterPolicyWithOperands is the ClusterPolicy a reconciler spec puts in front
+// of the API reader. The GPU Operator version label is fixed because nothing
+// gates on it once the operand versions are pinned.
+func clusterPolicyWithOperands(toolkitVersion, devicePluginVersion string) *unstructured.Unstructured {
+	return clusterPolicyOperandObject("v26.7.1", toolkitVersion, devicePluginVersion)
 }
 
-// newGpuOperatorChecker builds a checker over a ready ClusterPolicy carrying the
-// given operand versions. Those are what the ClusterPolicy path gates on; the
-// GPU Operator version label is fixed here because nothing reads it.
-func newGpuOperatorChecker(toolkitVersion, devicePluginVersion string, skipVersionChecks bool) GpuOperatorDependencyChecker {
+// clusterPolicyAPIReader serves the reconcile's single ClusterPolicy read from a
+// policy the spec supplies, and delegates every other read to envtest.
+//
+// The reconciler reads the ClusterPolicy through its APIReader so the DaemonSet
+// builders and the dependency checker share one read, and envtest serves no
+// nvidia.com CRD — so a spec that needs pinned operand versions has to put them
+// here. Supplying them to the checker instead leaves the reconcile reading an
+// absent ClusterPolicy, which skips the version gate entirely and passes the
+// spec for the wrong reason.
+type clusterPolicyAPIReader struct {
+	client.Reader
+	policy *unstructured.Unstructured
+}
+
+func (r clusterPolicyAPIReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	unstructuredList, ok := list.(*unstructured.UnstructuredList)
+	if !ok || unstructuredList.GetKind() != clusterPolicyGVK.Kind+"List" {
+		return r.Reader.List(ctx, list, opts...)
+	}
+	unstructuredList.Items = []unstructured.Unstructured{*r.policy}
+	return nil
+}
+
+// newGpuOperatorChecker builds a checker whose own reader serves no GPU Operator
+// objects. The ClusterPolicy it gates on now arrives from the reconcile instead
+// (see clusterPolicyAPIReader); its reader is consulted only for the OpenShift
+// ClusterServiceVersion fallback, which these specs do not exercise.
+func newGpuOperatorChecker(skipVersionChecks bool) GpuOperatorDependencyChecker {
 	return NewGpuOperatorDependencyChecker(fake.NewClientBuilder().
 		WithScheme(newDependencyScheme()).
-		WithObjects(clusterPolicyOperandObject("v26.7.1", toolkitVersion, devicePluginVersion)).
-		Build(), skipVersionChecks)
+		Build(), skipVersionChecks, testCheckerNamespace)
 }
 
 // Fixed args passed to every NewGpuFractioningConfigReconciler call below;
@@ -250,11 +356,16 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 
 		It("should check dependencies and not requeue after a healthy reconcile with a supported GPU Operator", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
-				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
+				k8sClient,
+				clusterPolicyAPIReader{
+					Reader: k8sClient,
+					policy: clusterPolicyWithOperands(supportedToolkitVersion, supportedDevicePluginVersion),
+				},
+				k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
 				testSkipGpuStackVersionChecksDisabled,
 			)
-			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithSupportedOperands()
+			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(false)
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
@@ -271,20 +382,31 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 		})
 
 		It("should mark Ready false when a GPU Operator operand is downgraded while daemons stay healthy", func() {
-			controllerReconciler := NewGpuFractioningConfigReconciler(
-				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
-				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
-				testSkipGpuStackVersionChecksDisabled,
-			)
-			controllerReconciler.GpuOperatorChecker = gpuOperatorCheckerWithSupportedOperands()
+			// Two reconcilers rather than one with a mutated field: the
+			// downgrade is a change to what the API server serves, and the
+			// daemons and Ready=True persist in between, which is what makes
+			// this a transition and not a cold start.
+			newReconciler := func(toolkitVersion string) *GpuFractioningConfigReconciler {
+				r := NewGpuFractioningConfigReconciler(
+					k8sClient,
+					clusterPolicyAPIReader{
+						Reader: k8sClient,
+						policy: clusterPolicyWithOperands(toolkitVersion, supportedDevicePluginVersion),
+					},
+					k8sClient.Scheme(), record.NewFakeRecorder(10),
+					"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
+					testSkipGpuStackVersionChecksDisabled,
+				)
+				r.GpuOperatorChecker = newGpuOperatorChecker(false)
+				return r
+			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			_, err := newReconciler(supportedToolkitVersion).Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(oldToolkitVersion, supportedDevicePluginVersion, false)
-			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			result, err := newReconciler(oldToolkitVersion).Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -301,14 +423,19 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 
 		It("should keep Ready true on an unsupported GPU Operator operand version when the version checks are bypassed", func() {
 			controllerReconciler := NewGpuFractioningConfigReconciler(
-				k8sClient, k8sClient, k8sClient.Scheme(), record.NewFakeRecorder(10),
+				k8sClient,
+				clusterPolicyAPIReader{
+					Reader: k8sClient,
+					policy: clusterPolicyWithOperands(oldToolkitVersion, supportedDevicePluginVersion),
+				},
+				k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
 				true,
 			)
 			// The bypass reaches the checker the reconciler builds for itself,
 			// not just the one this test substitutes below.
 			Expect(controllerReconciler.GpuOperatorChecker.skipVersionChecks).To(BeTrue())
-			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(oldToolkitVersion, supportedDevicePluginVersion, true)
+			controllerReconciler.GpuOperatorChecker = newGpuOperatorChecker(true)
 
 			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,

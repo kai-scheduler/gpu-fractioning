@@ -26,6 +26,54 @@ const (
 	testSupportSMSharingTrue = true
 )
 
+// Under the GPU Operator's NRI plugin the nvidia RuntimeClass is deleted, so
+// mpsd's GPU access has to come from a CDI device requested by annotation
+// instead. The reconciler decides which of the two applies; this covers the
+// builder honouring either.
+func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
+	tests := []struct {
+		name                string
+		managementCDIDevice string
+		runtimeClassName    *string
+		expectRuntimeClass  *string
+		expectAnnotation    string
+	}{
+		{
+			name:               "runtime class mode sets no annotation",
+			runtimeClassName:   ptr.To(daemonmgr.DefaultRuntimeClassName),
+			expectRuntimeClass: ptr.To(daemonmgr.DefaultRuntimeClassName),
+		},
+		{
+			name:                "nri mode annotates instead of setting a runtime class",
+			managementCDIDevice: daemonmgr.ManagementCDIDeviceAll,
+			expectAnnotation:    daemonmgr.ManagementCDIDeviceAll,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := defaultOpts()
+			opts.RuntimeClassName = tt.runtimeClassName
+			opts.ManagementCDIDevice = tt.managementCDIDevice
+
+			tmpl := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue).BuildDaemonSet(opts).Spec.Template
+
+			if tt.expectRuntimeClass == nil {
+				if tmpl.Spec.RuntimeClassName != nil {
+					t.Fatalf("RuntimeClassName = %q, want nil", *tmpl.Spec.RuntimeClassName)
+				}
+			} else if tmpl.Spec.RuntimeClassName == nil || *tmpl.Spec.RuntimeClassName != *tt.expectRuntimeClass {
+				t.Fatalf("RuntimeClassName = %v, want %q", tmpl.Spec.RuntimeClassName, *tt.expectRuntimeClass)
+			}
+
+			got := tmpl.Annotations["nvidia.cdi.k8s.io/container.mpsd"]
+			if got != tt.expectAnnotation {
+				t.Fatalf("nvidia.cdi.k8s.io/container.mpsd = %q, want %q", got, tt.expectAnnotation)
+			}
+		})
+	}
+}
+
 func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue)
 
