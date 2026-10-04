@@ -41,6 +41,10 @@ type cliFlags struct {
 	// false, the gpu-compute.mode: sm-sharing annotation is rejected like any
 	// other invalid value.
 	supportSMSharing bool
+	// injectCDIDevice requests each container's assigned GPU as a CDI device in
+	// addition to NVIDIA_VISIBLE_DEVICES. Set by the operator from the GPU
+	// Operator's spec.cdi.nriPluginEnabled, where the env var reaches nothing.
+	injectCDIDevice bool
 	// mapDir is the shared dir for the container->pod mapping handoff.
 	mapDir string
 	// logPodEvents logs each recorded/removed mapping event.
@@ -72,6 +76,7 @@ func parseFlags() cliFlags {
 	flag.StringVar(&f.mpsPipeDir, "pipe-dir", configuration.DefaultMPSPipeDirectory, "MPS pipe directory path")
 	flag.BoolVar(&f.failOpen, "fail-open", false, "if true, annotation parse errors skip the container instead of blocking it")
 	flag.BoolVar(&f.supportSMSharing, "support-sm-sharing", env.Bool("SUPPORT_SM_SHARING", true), "if false, the gpu-compute.mode: sm-sharing annotation is rejected like any other invalid value")
+	flag.BoolVar(&f.injectCDIDevice, "inject-cdi-device", env.Bool("INJECT_CDI_DEVICE", false), "request each container's assigned GPU as a CDI device as well as NVIDIA_VISIBLE_DEVICES; required where the GPU Operator runs its own NRI plugin, which deletes the nvidia RuntimeClass the env var depends on")
 	flag.StringVar(&f.mapDir, "map-dir", env.String("MAP_DIR", fsstore.DefaultMapDir), "shared directory for the container->pod mapping handoff read by the metrics sidecar")
 	flag.BoolVar(&f.logPodEvents, "log-pod-events", env.Bool("LOG_POD_EVENTS", false), "log each recorded/removed container->pod mapping event")
 	flag.StringVar(&f.logLevel, "log-level", "info", "log level (debug, info, warn, error)")

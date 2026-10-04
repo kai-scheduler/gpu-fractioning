@@ -46,6 +46,7 @@ func main() {
 		MPSPipeDirectory:       flags.mpsPipeDir,
 		FailOpen:               flags.failOpen,
 		SupportSMSharing:       flags.supportSMSharing,
+		InjectCDIDevice:        flags.injectCDIDevice,
 		RetroactiveEnforcement: flags.retroactiveEnforcement,
 		MapDir:                 flags.mapDir,
 		LogPodEvents:           flags.logPodEvents,

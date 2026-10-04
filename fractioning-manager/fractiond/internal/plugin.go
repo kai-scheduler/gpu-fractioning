@@ -51,6 +51,11 @@ type Config struct {
 	// toggle.
 	SupportSMSharing bool
 
+	// InjectCDIDevice requests a container's assigned GPU as a CDI device in
+	// addition to NVIDIA_VISIBLE_DEVICES (operator -> --inject-cdi-device, from
+	// the GPU Operator's spec.cdi.nriPluginEnabled).
+	InjectCDIDevice bool
+
 	// RetroactiveEnforcement enables the audit pass on NRI (re)connect: any
 	// GPU-fractioning container found running without the expected injection is
 	// stopped so kubelet recreates it through a healthy CreateContainer hook.
@@ -99,6 +104,7 @@ type Plugin struct {
 	MPSPipeDirectory string
 	FailOpen         bool
 	SupportSMSharing bool
+	InjectCDIDevice  bool
 	Log              *slog.Logger
 
 	events    *events.Processor
@@ -151,6 +157,7 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		MPSPipeDirectory: cfg.MPSPipeDirectory,
 		FailOpen:         cfg.FailOpen,
 		SupportSMSharing: cfg.SupportSMSharing,
+		InjectCDIDevice:  cfg.InjectCDIDevice,
 		Log:              log,
 		events:           proc,
 		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, log: log},
@@ -233,9 +240,10 @@ func (p *Plugin) CreateContainer(_ context.Context, pod *api.PodSandbox, ctr *ap
 // adjustment when the container has no GPU memory annotations, and an error only
 // when annotation parsing fails while FailOpen is false. For a GPU-fractioning
 // container it additionally injects NVIDIA_VISIBLE_DEVICES from the container's
-// device-assignment annotation when present, and routes the MPS pipe mount to
-// either the default or the shared MPS server based on the container's
-// compute-mode annotation (see injection.MPSPipeMount).
+// device-assignment annotation when present, requests that same GPU as a CDI
+// device if InjectCDIDevice is set, and routes the MPS pipe mount to either the
+// default or the shared MPS server based on the container's compute-mode
+// annotation (see injection.MPSPipeMount).
 func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.ContainerAdjustment, error) {
 	gpuMemoryCfg, err := annotations.ParseGPUMemoryAnnotations(pod.Annotations, ctr.Name, p.AnnotationPrefix)
 	if err != nil {
@@ -307,11 +315,19 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	// NRI applies the override instead of rejecting it as a conflict, and the
 	// container ends up with a single, correct value rather than a duplicate.
 	visibleDevices := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	var cdiDevices []string
 	if visibleDevices != "" {
 		if containerHasEnv(ctr, injection.EnvVisibleDevices) {
 			adj.RemoveEnv(injection.EnvVisibleDevices)
 		}
 		adj.AddEnv(injection.EnvVisibleDevices, visibleDevices)
+
+		if p.InjectCDIDevice {
+			cdiDevices = injection.CDIDeviceNames(visibleDevices)
+			for _, name := range cdiDevices {
+				adj.AddCDIDevice(&api.CDIDevice{Name: name})
+			}
+		}
 	}
 
 	p.Log.Info("adjusting container with GPU memory config",
@@ -320,6 +336,7 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		"request", gpuMemoryCfg.Request,
 		"limit", gpuMemoryCfg.Limit,
 		"visibleDevices", visibleDevices,
+		"cdiDevices", cdiDevices,
 		"computeMode", computeMode,
 	)
 

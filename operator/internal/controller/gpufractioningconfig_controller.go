@@ -313,10 +313,11 @@ func (r *GpuFractioningConfigReconciler) evaluateDriverUpgrade(ctx context.Conte
 // contains the Helm-injected defaults; each daemon's BuildDaemonSet merges its
 // own CRD overrides internally.
 //
-// It also resolves how GPUs reach the daemon containers, which is the one
-// decision the builders must not make for themselves: the GPU Operator deletes
-// the nvidia RuntimeClass when it runs its NRI plugin, so the daemons request a
-// management CDI device by annotation instead.
+// It also resolves how GPUs reach containers, which is the one decision the
+// builders must not make for themselves: the GPU Operator deletes the nvidia
+// RuntimeClass when it runs its NRI plugin, so the daemons request a management
+// CDI device by annotation instead, and fractiond is told to request each
+// workload's assigned GPU as a CDI device.
 func (r *GpuFractioningConfigReconciler) buildOptions(ctx context.Context, config *v1alpha1.GpuFractioningConfig, clusterPolicy ClusterPolicy) daemonmgr.BuildOptions {
 	opts := daemonmgr.BuildOptions{
 		Namespace:          r.Namespace,
@@ -337,7 +338,7 @@ func (r *GpuFractioningConfigReconciler) buildOptions(ctx context.Context, confi
 				"runtimeClassName", *opts.RuntimeClassName, "managementCDIDevice", daemonmgr.ManagementCDIDeviceAll)
 		}
 		opts.RuntimeClassName = nil
-		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+		opts.NRIPluginEnabled = true
 	}
 
 	return opts

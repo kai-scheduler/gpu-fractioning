@@ -22,12 +22,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   into the pod template rather than assigned, so fractiond keeps its
   `prometheus.io/*` scrape configuration. Behaviour is unchanged wherever the
   NRI plugin is off.
-  **This covers the daemons only. Fractional workloads still do not get a GPU
-  under the NRI plugin** — they do not request the `nvidia.com/gpu` resource, so
-  the device plugin skips them and their GPU comes from fractiond injecting
-  `NVIDIA_VISIBLE_DEVICES`, which only `nvidia-container-runtime` reads and
-  which the NRI path does not involve. Do not enable the NRI plugin on a cluster
-  running fractional workloads.
+- Fractional workloads now get their GPU under the GPU Operator's NRI plugin
+  too. A fractional container does not request the `nvidia.com/gpu` resource, so
+  the device plugin skips it and its GPU came from fractiond injecting
+  `NVIDIA_VISIBLE_DEVICES` — read only by `nvidia-container-runtime`, which the
+  deleted `nvidia` RuntimeClass selected. Nothing reads it in this mode (the
+  CDI spec overwrites it with `void`), so the container started without a GPU
+  and failed at its first CUDA call. fractiond now also requests the assigned
+  GPU as the CDI device `k8s.device-plugin.nvidia.com/gpu=<uuid>` — the kind the
+  device plugin publishes, named per UUID, and not subject to the namespace
+  allowlist that gates the management device, so workload namespaces must *not*
+  be added to it. The operator passes `--inject-cdi-device` to fractiond from
+  the same `spec.cdi.nriPluginEnabled` reading, always explicitly, so a cluster
+  leaving the mode rolls the behaviour back rather than keeping a stale setting.
+  `NVIDIA_VISIBLE_DEVICES` is still injected, so one build serves both modes.
 - New `Ready` condition reason `ManagementCDINamespaceNotAllowed`, reported when
   the GPU Operator runs its NRI plugin but the container toolkit does not permit
   the gpu-fractioning namespace to request management CDI devices. The toolkit

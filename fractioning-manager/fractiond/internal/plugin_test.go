@@ -297,6 +297,96 @@ func TestCreateContainerOverwritesExistingVisibleDevices(t *testing.T) {
 	}
 }
 
+// TestCreateContainerRequestsAssignedGPUAsCDIDevice covers the device request
+// that survives where the GPU Operator runs its own NRI plugin. The env var
+// alone is inert there: nothing in the chain reads it without
+// nvidia-container-runtime, which only the (by then deleted) nvidia
+// RuntimeClass selects.
+func TestCreateContainerRequestsAssignedGPUAsCDIDevice(t *testing.T) {
+	tests := []struct {
+		name      string
+		devices   string
+		disabled  bool
+		wantCDI   []string
+		wantNoCDI bool
+	}{
+		{
+			name:    "single device",
+			devices: "GPU-abc123",
+			wantCDI: []string{injection.CDIKindDevicePlugin + "=GPU-abc123"},
+		},
+		{
+			// Off unless the operator says the GPU Operator runs its NRI
+			// plugin, so the RuntimeClass path keeps injecting GPUs exactly one
+			// way.
+			name:      "no device requested when disabled",
+			devices:   "GPU-abc123",
+			disabled:  true,
+			wantNoCDI: true,
+		},
+		{
+			name:    "each device is qualified individually",
+			devices: "GPU-abc123,GPU-def456",
+			wantCDI: []string{
+				injection.CDIKindDevicePlugin + "=GPU-abc123",
+				injection.CDIKindDevicePlugin + "=GPU-def456",
+			},
+		},
+		{
+			// "all" selects devices without naming one, so there is no CDI
+			// device to request. The env var is still injected for the
+			// RuntimeClass path, which does understand it.
+			name:      "all names no device",
+			devices:   "all",
+			wantNoCDI: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestPlugin(t)
+			p.InjectCDIDevice = !tt.disabled
+			pod := &api.PodSandbox{
+				Name: "test-pod",
+				Annotations: map[string]string{
+					"nvidia.com/container.trainer.gpu-memory.limit": "4Gi",
+					"nvidia.com/container.trainer.gpus.devices":     tt.devices,
+				},
+			}
+			ctr := &api.Container{Name: "trainer"}
+
+			adj, _, err := p.CreateContainer(context.Background(), pod, ctr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if adj == nil {
+				t.Fatal("expected non-nil adjustment, got nil")
+			}
+
+			var got []string
+			for _, d := range adj.CDIDevices {
+				got = append(got, d.Name)
+			}
+
+			if tt.wantNoCDI {
+				if len(got) != 0 {
+					t.Errorf("expected no CDI devices, got %v", got)
+				}
+				return
+			}
+
+			if len(got) != len(tt.wantCDI) {
+				t.Fatalf("CDI devices = %v, want %v", got, tt.wantCDI)
+			}
+			for i, want := range tt.wantCDI {
+				if got[i] != want {
+					t.Errorf("CDI device %d = %q, want %q", i, got[i], want)
+				}
+			}
+		})
+	}
+}
+
 // TestCreateContainer_ComputeModeWithoutMemoryAnnotation covers a container
 // that asks for a compute mode but never asks for GPU memory. It is not a
 // fractioning container, so it is left alone and the mode has no effect —

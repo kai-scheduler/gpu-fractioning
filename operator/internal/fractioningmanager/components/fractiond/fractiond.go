@@ -169,7 +169,7 @@ func (d *daemon) applyMetricsSidecar(result *appsv1.DaemonSet, opts daemonmgr.Bu
 	// the GPU Operator's NRI plugin there is no RuntimeClass to opt into: the GPU
 	// arrives as a CDI device requested by annotation. Scoped to metricsd for the
 	// same reason RuntimeClassName is only set when it runs. No-op otherwise.
-	daemonmgr.SetManagementCDIDevice(&result.Spec.Template.ObjectMeta, metricsdName, opts.ManagementCDIDevice)
+	daemonmgr.SetManagementCDIDevice(&result.Spec.Template.ObjectMeta, metricsdName, opts.NRIPluginEnabled)
 }
 
 // metricsListenPort returns the TCP port metricsd actually listens on: the port
@@ -248,7 +248,7 @@ func (d *daemon) buildFractiondContainer(opts daemonmgr.BuildOptions) (corev1.Co
 		Image:           image.FullImage(),
 		ImagePullPolicy: image.PullPolicy(),
 		SecurityContext: daemonmgr.PrivilegedSecurityContext(),
-		Args:            d.buildArgs(),
+		Args:            d.buildArgs(opts),
 		ReadinessProbe:  readinessProbe,
 		LivenessProbe:   livenessProbe,
 		Resources:       daemonmgr.DaemonResources(fractiondCPURequest, fractiondMemRequest, fractiondMemLimit),
@@ -403,10 +403,16 @@ func (d *daemon) buildMetricsdArgs() []string {
 	return args
 }
 
-func (d *daemon) buildArgs() []string {
+func (d *daemon) buildArgs(opts daemonmgr.BuildOptions) []string {
 	// Always passed explicitly (independent of the fractioningAgent CRD spec
 	// below): it is a Helm-installation-time toggle, not a per-CR setting.
 	args := []string{"--support-sm-sharing=" + strconv.FormatBool(d.supportSMSharing)}
+
+	// Likewise always explicit, and for the same reason it cannot be a CRD
+	// field: it tracks the GPU Operator's configuration, not ours. Passing it
+	// unconditionally means a cluster that leaves NRI mode rolls fractiond back
+	// to false rather than keeping a stale true from the previous rendering.
+	args = append(args, "--inject-cdi-device="+strconv.FormatBool(opts.NRIPluginEnabled))
 
 	spec := d.fractioningSpec
 	if spec == nil {

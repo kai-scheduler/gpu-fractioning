@@ -144,8 +144,14 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	// The sm-sharing chicken bit is always passed, even when spec is nil (it is
 	// an installation-time toggle, independent of the fractioningAgent CRD spec).
 	args := ctr.Args
-	if len(args) != 1 || args[0] != "--support-sm-sharing=true" {
-		t.Errorf("expected only --support-sm-sharing=true when spec is nil, got %v", args)
+	expected := []string{"--support-sm-sharing=true", "--inject-cdi-device=false"}
+	if len(args) != len(expected) {
+		t.Fatalf("args = %v, want %v", args, expected)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Errorf("args[%d] = %q, want %q", i, args[i], expected[i])
+		}
 	}
 }
 
@@ -279,7 +285,7 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 	t.Run("nri mode annotates metricsd and sets no runtime class", func(t *testing.T) {
 		opts := defaultOpts()
 		opts.RuntimeClassName = nil
-		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+		opts.NRIPluginEnabled = true
 
 		tmpl := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: true}, testSupportSMSharingTrue).
 			BuildDaemonSet(opts).Spec.Template
@@ -317,7 +323,7 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 	t.Run("metrics disabled gets neither", func(t *testing.T) {
 		opts := defaultOpts()
 		opts.RuntimeClassName = nil
-		opts.ManagementCDIDevice = daemonmgr.ManagementCDIDeviceAll
+		opts.NRIPluginEnabled = true
 
 		tmpl := NewFractiondDaemon(nil, &v1alpha1.MetricsAgentSpec{Enabled: false}, testSupportSMSharingTrue).
 			BuildDaemonSet(opts).Spec.Template
@@ -496,6 +502,7 @@ func TestDaemon_BuildDaemonSet_Args(t *testing.T) {
 
 	expected := []string{
 		"--support-sm-sharing=true",
+		"--inject-cdi-device=false",
 		"--annotation-prefix", "custom.prefix.",
 		"--fail-open",
 		"--socket-path", "/custom/nri.sock",
@@ -597,6 +604,41 @@ func TestDaemon_BuildDaemonSet_SupportSMSharing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			d := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{}, nil, tt.supportSMSharing)
 			ctr := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Containers[0]
+
+			var found bool
+			for _, a := range ctr.Args {
+				if a == tt.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected %q in args, got %v", tt.want, ctr.Args)
+			}
+		})
+	}
+}
+
+// TestDaemon_BuildDaemonSet_InjectCDIDevice verifies fractiond is told whether
+// to request workload GPUs as CDI devices, which follows the GPU Operator's
+// spec.cdi.nriPluginEnabled rather than any setting of ours. It is asserted as
+// an explicit true/false rather than a present/absent flag: a cluster leaving
+// NRI mode has to roll fractiond back to false, and an omitted arg would leave
+// the previous rendering's behaviour in place.
+func TestDaemon_BuildDaemonSet_InjectCDIDevice(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		nriPluginEnabled bool
+		want             string
+	}{
+		{name: "nri mode requests a CDI device", nriPluginEnabled: true, want: "--inject-cdi-device=true"},
+		{name: "runtime class mode does not", nriPluginEnabled: false, want: "--inject-cdi-device=false"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := defaultOpts()
+			opts.NRIPluginEnabled = tt.nriPluginEnabled
+
+			d := NewFractiondDaemon(&v1alpha1.FractioningAgentSpec{}, nil, testSupportSMSharingTrue)
+			ctr := d.BuildDaemonSet(opts).Spec.Template.Spec.Containers[0]
 
 			var found bool
 			for _, a := range ctr.Args {

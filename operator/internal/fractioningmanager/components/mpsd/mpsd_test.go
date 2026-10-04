@@ -32,11 +32,11 @@ const (
 // builder honouring either.
 func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 	tests := []struct {
-		name                string
-		managementCDIDevice string
-		runtimeClassName    *string
-		expectRuntimeClass  *string
-		expectAnnotation    string
+		name               string
+		nriPluginEnabled   bool
+		runtimeClassName   *string
+		expectRuntimeClass *string
+		expectAnnotation   string
 	}{
 		{
 			name:               "runtime class mode sets no annotation",
@@ -44,9 +44,9 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 			expectRuntimeClass: ptr.To(daemonmgr.DefaultRuntimeClassName),
 		},
 		{
-			name:                "nri mode annotates instead of setting a runtime class",
-			managementCDIDevice: daemonmgr.ManagementCDIDeviceAll,
-			expectAnnotation:    daemonmgr.ManagementCDIDeviceAll,
+			name:             "nri mode annotates instead of setting a runtime class",
+			nriPluginEnabled: true,
+			expectAnnotation: daemonmgr.ManagementCDIDeviceAll,
 		},
 	}
 
@@ -54,7 +54,7 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := defaultOpts()
 			opts.RuntimeClassName = tt.runtimeClassName
-			opts.ManagementCDIDevice = tt.managementCDIDevice
+			opts.NRIPluginEnabled = tt.nriPluginEnabled
 
 			tmpl := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue).BuildDaemonSet(opts).Spec.Template
 

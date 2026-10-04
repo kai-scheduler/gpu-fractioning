@@ -23,23 +23,25 @@ const (
 	ManagementCDIDeviceAll = "management.nvidia.com/gpu=all"
 )
 
-// SetManagementCDIDevice requests a CDI device for the named container by
-// annotating the pod template — how a daemon container gets GPU access when the
-// GPU Operator runs its NRI plugin, since the nvidia RuntimeClass is deleted in
-// that mode.
+// SetManagementCDIDevice requests the management CDI device for the named
+// container by annotating the pod template — how a daemon container gets GPU
+// access when the GPU Operator runs its NRI plugin, since the nvidia
+// RuntimeClass is deleted in that mode.
 //
-// device is BuildOptions.ManagementCDIDevice: empty means the GPU Operator is
-// not in NRI mode and the pod template is left untouched. The annotation is
+// nriPluginEnabled is BuildOptions.NRIPluginEnabled: false leaves the pod
+// template untouched. The device is not a parameter because there is only one —
+// ManagementCDIDeviceAll — so passing it would just be a second way to say the
+// same thing, and a way for a caller to say it wrongly. The annotation is
 // merged rather than assigned, because fractiond already carries its
 // prometheus.io/* scrape config here.
-func SetManagementCDIDevice(podMeta *metav1.ObjectMeta, containerName, device string) {
-	if device == "" {
+func SetManagementCDIDevice(podMeta *metav1.ObjectMeta, containerName string, nriPluginEnabled bool) {
+	if !nriPluginEnabled {
 		return
 	}
 	if podMeta.Annotations == nil {
 		podMeta.Annotations = map[string]string{}
 	}
-	podMeta.Annotations[managementCDIDeviceAnnotation(containerName)] = device
+	podMeta.Annotations[managementCDIDeviceAnnotation(containerName)] = ManagementCDIDeviceAll
 }
 
 // managementCDIDeviceAnnotation returns the pod annotation key that requests a

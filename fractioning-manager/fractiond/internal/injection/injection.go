@@ -12,6 +12,7 @@ package injection
 
 import (
 	"path/filepath"
+	"strings"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
@@ -40,6 +41,45 @@ const (
 	// injection contract.
 	EnvVisibleDevices = "NVIDIA_VISIBLE_DEVICES"
 )
+
+// CDIKindDevicePlugin is the CDI kind the NVIDIA device plugin publishes: one
+// device per physical GPU, named by its UUID. Unlike
+// management.nvidia.com/gpu, it is not gated by the container toolkit's
+// namespace allowlist.
+const CDIKindDevicePlugin = "k8s.device-plugin.nvidia.com/gpu"
+
+// cdiNonDeviceValues are NVIDIA_VISIBLE_DEVICES values that select devices
+// without naming any: they are a contract with the NVIDIA container runtime and
+// have no CDI device of their own, so CDIDeviceNames drops them rather than
+// building a name that cannot resolve.
+var cdiNonDeviceValues = map[string]bool{"all": true, "void": true, "none": true, "": true}
+
+// CDIDeviceNames turns the scheduler's per-container device assignment (the
+// comma-separated value of the gpus.devices annotation, as returned by
+// annotations.ParseVisibleDevices) into fully qualified CDI device names.
+//
+// A CDI device is named "<kind>=<device>", so each element is qualified
+// individually: "GPU-a,GPU-b" becomes two names, not one name holding a list.
+// Values that name no device ("all", "void", "none") are dropped.
+//
+// Anything else is passed through as the device name. The device plugin names
+// its devices by UUID, so a GPU index or other spelling will not resolve and
+// the runtime will refuse to create the container. That is deliberate: a device
+// assignment the runtime cannot honour should fail loudly here rather than
+// start a container with no GPU, which is the silent failure this whole path
+// exists to avoid.
+func CDIDeviceNames(visibleDevices string) []string {
+	var names []string
+	for _, device := range strings.Split(visibleDevices, ",") {
+		device = strings.TrimSpace(device)
+		if cdiNonDeviceValues[device] {
+			continue
+		}
+		names = append(names, CDIKindDevicePlugin+"="+device)
+	}
+
+	return names
+}
 
 // AllEnvKeys lists every env-var key the create hook may inject. Consumers that
 // need to recognize injected env (e.g. the audit's presentEnv) should range over

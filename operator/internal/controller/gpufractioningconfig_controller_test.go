@@ -194,8 +194,9 @@ func TestBuildOptionsResolvesGpuInjection(t *testing.T) {
 			} else if opts.RuntimeClassName == nil || *opts.RuntimeClassName != *tt.expectRuntimeClass {
 				t.Fatalf("RuntimeClassName = %v, expected %q", opts.RuntimeClassName, *tt.expectRuntimeClass)
 			}
-			if opts.ManagementCDIDevice != tt.expectManagementCDI {
-				t.Fatalf("ManagementCDIDevice = %q, expected %q", opts.ManagementCDIDevice, tt.expectManagementCDI)
+			wantNRI := tt.expectManagementCDI != ""
+			if opts.NRIPluginEnabled != wantNRI {
+				t.Fatalf("NRIPluginEnabled = %t, expected %t", opts.NRIPluginEnabled, wantNRI)
 			}
 
 			// The decision is only worth anything if it survives into the
