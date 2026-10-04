@@ -5,7 +5,7 @@
 // never enters the project's shipped dependency graph or generated license list.
 module github.com/kai-scheduler/gpu-fractioning/hack/imagelock
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/google/go-containerregistry v0.22.1

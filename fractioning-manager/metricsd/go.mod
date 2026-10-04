@@ -1,6 +1,6 @@
 module github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/NVIDIA/go-nvml v0.13.3-1

@@ -12,7 +12,7 @@
 #
 # Build from the REPO ROOT (context must include go.mod, pkg/, fractioning-manager/, hack/):
 #   docker build -f hack/fake-mps/Dockerfile -t <name>:<tag> .
-FROM --platform=$TARGETPLATFORM golang:1.26.4-bookworm AS mpsd-builder
+FROM --platform=$TARGETPLATFORM golang:1.26.6-bookworm AS mpsd-builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 WORKDIR /workspace
@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -trimpath -ldflags="-s -w" -o /mpsd ./fractioning-manager/mpsd/cmd
 
 # Fake nvidia-cuda-mps-control — standalone std-lib-only module (hack/fake-mps).
-FROM --platform=$BUILDPLATFORM golang:1.26.4-alpine AS fake-builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS fake-builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 COPY hack/fake-mps/ /fake-mps-src/

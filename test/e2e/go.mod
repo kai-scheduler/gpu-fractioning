@@ -1,6 +1,6 @@
 module github.com/kai-scheduler/gpu-fractioning/test/e2e
 
-go 1.26.4
+go 1.26.6
 
 require (
 	github.com/kai-scheduler/gpu-fractioning/api v0.0.0

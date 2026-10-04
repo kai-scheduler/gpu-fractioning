@@ -1,3 +1,3 @@
 module github.com/kai-scheduler/gpu-fractioning/pkg
 
-go 1.26.4
+go 1.26.6
