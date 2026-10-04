@@ -139,10 +139,11 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 | `metricsAgent.enabled` | `true` | run the metricsd metrics sidecar |
 | `metrics.enabled` / `metrics.port` | `true` / `8080` | controller metrics endpoint (plain HTTP) |
 | `prometheus.enabled` | `false` | install a `ServiceMonitor` + `PodMonitor` (also requires `metrics.enabled` and the Prometheus-Operator CRDs) |
+| `daemonTolerations` | `nvidia.com/gpu` `Exists`/`NoSchedule` | tolerations for the fractiond/mpsd **DaemonSets**, which run on tainted GPU nodes. Setting it replaces the default rather than adding to it |
 | `nodeSelector` | `{}` | scheduling constraint for the **controller** Deployment |
 | `global.fipsMode` | `off` | `on` deploys the FIPS 140-3 image variants (`<version>-fips`); `only` also enforces FIPS at runtime, for assessment rather than production. See [FIPS 140-3](docs/fips/README.md) |
 
-> The GPU **nodeSelector** for the DaemonSets is set on the `GpuFractioningConfig` CR (`spec.nodeSelector`), not the chart-level `nodeSelector`.
+> The GPU **nodeSelector** for the DaemonSets is set on the `GpuFractioningConfig` CR (`spec.nodeSelector`), not the chart-level `nodeSelector`. Likewise `daemonTolerations` is the DaemonSets' tolerations (via `spec.tolerations`), while the chart-level `tolerations` applies to the controller Deployment.
 
 ### Upgrading
 
@@ -230,6 +231,7 @@ A single cluster-scoped CR configures the whole stack. Field docs are authoritat
 | Field | Description |
 |-------|-------------|
 | `spec.nodeSelector` *(required)* | Which nodes the fractiond/mpsd DaemonSets target. **Immutable** — set once at creation. The operator adds `nvidia.com/gpu.deploy.client=true` to the daemons' own nodeSelector on top of this (see below), so it does not belong here. |
+| `spec.tolerations` | Tolerations added to the fractiond/mpsd DaemonSets, for GPU nodes tainted to keep non-GPU work off them. Set from the chart's `daemonTolerations`. Without a toleration for every taint on a targeted node the daemons never schedule there, and the node reports no `gpu-fractioning.nvidia.com/Ready` condition at all. |
 | `spec.runtimeClassName` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access. Defaults to `nvidia`; set `""` to use the node default runtime. |
 | `spec.fractioningAgent` | fractiond options (annotation prefix, log level, fail-open, retroactive enforcement). |
 | `spec.metricsAgent` | metricsd options (`enabled`, metric-name overrides, extra NVML volumes/mounts). |

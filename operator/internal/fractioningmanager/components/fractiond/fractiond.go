@@ -100,6 +100,7 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 	// HostPID is required so fractiond can observe container lifecycle events and
 	// so metricsd can resolve NVML host PIDs through its own /proc.
 	podSpec.NodeSelector = daemonmgr.DaemonNodeSelector(opts.NodeSelector)
+	podSpec.Tolerations = opts.Tolerations
 	podSpec.HostPID = true
 
 	fractiondContainer, fractiondVolumes := d.buildFractiondContainer(opts)

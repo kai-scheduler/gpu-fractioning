@@ -1,0 +1,35 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# daemonTolerations reaches the DaemonSets only through the default CR, which the
+# operator reads — so a values change that stops landing in spec.tolerations is
+# invisible until the daemons fail to schedule on a tainted GPU node.
+suite: daemon tolerations
+templates:
+  - default-cr.yaml
+tests:
+  - it: tolerates the conventional NVIDIA GPU taint by default
+    asserts:
+      - equal:
+          path: spec.tolerations
+          value:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+  - it: replaces the default with the configured tolerations
+    set:
+      daemonTolerations:
+        - operator: Exists
+    asserts:
+      - equal:
+          path: spec.tolerations
+          value:
+            - operator: Exists
+
+  - it: omits tolerations when set to an empty list
+    set:
+      daemonTolerations: []
+    asserts:
+      - notExists:
+          path: spec.tolerations

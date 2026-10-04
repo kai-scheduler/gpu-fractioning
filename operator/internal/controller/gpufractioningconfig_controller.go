@@ -311,6 +311,7 @@ func (r *GpuFractioningConfigReconciler) buildOptions(config *v1alpha1.GpuFracti
 	return daemonmgr.BuildOptions{
 		Namespace:          r.Namespace,
 		NodeSelector:       config.Spec.NodeSelector,
+		Tolerations:        config.Spec.Tolerations,
 		ServiceAccountName: r.DaemonServiceAccountName,
 		RuntimeClassName:   daemonmgr.ResolveRuntimeClassName(config.Spec.RuntimeClassName),
 		DefaultImages:      r.DefaultImages,

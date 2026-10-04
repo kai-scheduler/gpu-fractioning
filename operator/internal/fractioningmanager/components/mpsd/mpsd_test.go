@@ -345,6 +345,23 @@ func TestDaemon_BuildDaemonSet_TerminationGrace(t *testing.T) {
 	}
 }
 
+func TestDaemon_BuildDaemonSet_Tolerations(t *testing.T) {
+	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue)
+
+	if got := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Tolerations; got != nil {
+		t.Errorf("Tolerations = %v, want nil when none are configured", got)
+	}
+
+	want := []corev1.Toleration{{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule}}
+	opts := defaultOpts()
+	opts.Tolerations = want
+
+	got := d.BuildDaemonSet(opts).Spec.Template.Spec.Tolerations
+	if len(got) != 1 || got[0] != want[0] {
+		t.Errorf("Tolerations = %v, want %v", got, want)
+	}
+}
+
 func defaultOpts() daemonmgr.BuildOptions {
 	return daemonmgr.BuildOptions{
 		Namespace:          "gpu-fractioning-system",

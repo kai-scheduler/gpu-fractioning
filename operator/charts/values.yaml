@@ -56,6 +56,21 @@ fullnameOverride: ""
 # provides NVIDIA GPU/NVML access.
 runtimeClassName: "nvidia"
 
+# daemonTolerations are the tolerations on the fractiond and mpsd DaemonSets,
+# which run on the GPU nodes selected by the CR's spec.nodeSelector. The
+# chart-level `tolerations` below applies to the controller Deployment instead.
+#
+# The default covers the conventional NVIDIA GPU taint. Setting this replaces
+# the default rather than adding to it, so keep the nvidia.com/gpu entry unless
+# your GPU nodes genuinely do not carry that taint. Without a toleration for
+# every taint on a GPU node, the daemons never schedule there: the node reports
+# no gpu-fractioning.nvidia.com/Ready condition and fractional GPU workloads are
+# rejected from it.
+daemonTolerations:
+  - key: nvidia.com/gpu
+    operator: Exists
+    effect: NoSchedule
+
 # supportSmSharing is the installation-time toggle for the sm-sharing compute
 # mode: mpsd's shared MPS server (context-share, [servers.shared]) and
 # fractiond's routing of the gpu-compute.mode: sm-sharing annotation to it.

@@ -23,6 +23,15 @@ type GpuFractioningConfigSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="nodeSelector is immutable; delete and recreate the GpuFractioningConfig to change it"
 	NodeSelector map[string]string `json:"nodeSelector"`
 
+	// tolerations are added to the managed DaemonSets (fractiond, mpsd). GPU nodes
+	// are commonly tainted to keep non-GPU work off them, and without a matching
+	// toleration the daemons never schedule there — the nodes stay unfractionable
+	// and report no gpu-fractioning.nvidia.com/Ready condition at all.
+	// Example: {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}.
+	// +optional
+	// +listType=atomic
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// runtimeClassName sets the RuntimeClass for daemon pods that need NVIDIA
 	// GPU/NVML access. Defaults to "nvidia". Set to "" to use the node's default
 	// runtime class (only safe when the default runtime already provides NVIDIA

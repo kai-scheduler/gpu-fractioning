@@ -85,6 +85,24 @@ func waitingStatus(reason string) corev1.ContainerStatus {
 	}
 }
 
+func TestBuildOptionsPropagatesTolerations(t *testing.T) {
+	tolerations := []corev1.Toleration{
+		{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoSchedule},
+	}
+	r := &GpuFractioningConfigReconciler{}
+
+	opts := r.buildOptions(&gpufractioningv1alpha1.GpuFractioningConfig{
+		Spec: gpufractioningv1alpha1.GpuFractioningConfigSpec{
+			NodeSelector: map[string]string{"nvidia.com/gpu.present": "true"},
+			Tolerations:  tolerations,
+		},
+	})
+
+	if len(opts.Tolerations) != 1 || opts.Tolerations[0] != tolerations[0] {
+		t.Errorf("Tolerations = %v, want %v", opts.Tolerations, tolerations)
+	}
+}
+
 func TestGpuOperatorDependencyGVKExists(t *testing.T) {
 	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{clusterPolicyGVK.GroupVersion()})
 	mapper.Add(clusterPolicyGVK, meta.RESTScopeRoot)

@@ -8,8 +8,8 @@
 package v1alpha1
 
 import (
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -23,12 +23,12 @@ func (in *FractioningAgentSpec) DeepCopyInto(out *FractioningAgentSpec) {
 	}
 	if in.RetryInterval != nil {
 		in, out := &in.RetryInterval, &out.RetryInterval
-		*out = new(v1.Duration)
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 	if in.StableThreshold != nil {
 		in, out := &in.StableThreshold, &out.StableThreshold
-		*out = new(v1.Duration)
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 	if in.MaxRetries != nil {
@@ -122,6 +122,13 @@ func (in *GpuFractioningConfigSpec) DeepCopyInto(out *GpuFractioningConfigSpec) 
 			(*out)[key] = val
 		}
 	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]v1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.RuntimeClassName != nil {
 		in, out := &in.RuntimeClassName, &out.RuntimeClassName
 		*out = new(string)
@@ -159,7 +166,7 @@ func (in *GpuFractioningConfigStatus) DeepCopyInto(out *GpuFractioningConfigStat
 	*out = *in
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]v1.Condition, len(*in))
+		*out = make([]metav1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -196,14 +203,14 @@ func (in *MetricsAgentSpec) DeepCopyInto(out *MetricsAgentSpec) {
 	*out = *in
 	if in.Volumes != nil {
 		in, out := &in.Volumes, &out.Volumes
-		*out = make([]corev1.Volume, len(*in))
+		*out = make([]v1.Volume, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
 	if in.VolumeMounts != nil {
 		in, out := &in.VolumeMounts, &out.VolumeMounts
-		*out = make([]corev1.VolumeMount, len(*in))
+		*out = make([]v1.VolumeMount, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -230,7 +237,7 @@ func (in *MpsDaemonSpec) DeepCopyInto(out *MpsDaemonSpec) {
 	*out = *in
 	if in.Backoff != nil {
 		in, out := &in.Backoff, &out.Backoff
-		*out = new(v1.Duration)
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 	if in.MaxRetries != nil {
@@ -240,12 +247,12 @@ func (in *MpsDaemonSpec) DeepCopyInto(out *MpsDaemonSpec) {
 	}
 	if in.StableThreshold != nil {
 		in, out := &in.StableThreshold, &out.StableThreshold
-		*out = new(v1.Duration)
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 	if in.GracefulStopDelay != nil {
 		in, out := &in.GracefulStopDelay, &out.GracefulStopDelay
-		*out = new(v1.Duration)
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 }

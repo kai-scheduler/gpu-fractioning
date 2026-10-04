@@ -14,6 +14,10 @@ metadata:
 spec:
   nodeSelector:
     nvidia.com/gpu.present: "true"
+  {{- with .Values.daemonTolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if hasKey .Values "runtimeClassName" }}
   runtimeClassName: {{ .Values.runtimeClassName | quote }}
   {{- end }}
