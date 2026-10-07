@@ -355,6 +355,28 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "not ready: FractiondReady",
 		},
 		{
+			name:  "ClusterServiceVersion from another vendor is ignored",
+			input: falseReady,
+			objects: []client.Object{
+				clusterServiceVersionObjectFrom("gpu-operator-stand-in.v25.10.0", "25.10.0", "Example Vendor"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonComponentNotReady,
+			expectedMessage: "not ready: FractiondReady",
+		},
+		{
+			// The provider is optional, so its absence leaves the name prefix as
+			// the only available evidence and the version is gated on that alone.
+			name:  "ClusterServiceVersion without a provider is still gated",
+			input: falseReady,
+			objects: []client.Object{
+				clusterServiceVersionObjectFrom("gpu-operator-certified.v26.3.3", "26.3.3", ""),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			expectedMessage: "26.3.3",
+		},
+		{
 			// A ClusterPolicy short-circuits the ClusterServiceVersion lookup
 			// entirely, so a CSV below the floor alongside one must not block:
 			// where operand versions are readable they are the only gate.
@@ -883,9 +905,14 @@ func clusterPolicyOperandObject(operatorVersion, toolkitVersion, devicePluginVer
 }
 
 func clusterServiceVersionObject(name, version string) *unstructured.Unstructured {
+	return clusterServiceVersionObjectFrom(name, version, "NVIDIA Corporation")
+}
+
+func clusterServiceVersionObjectFrom(name, version, provider string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
-			"version": version,
+			"version":  version,
+			"provider": map[string]any{"name": provider},
 		},
 	}}
 	obj.SetGroupVersionKind(clusterServiceVersionGVK)

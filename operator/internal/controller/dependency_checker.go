@@ -36,6 +36,8 @@ const (
 	clusterPolicyReadyCondition = "Ready"
 	clusterPolicyErrorCondition = "Error"
 	clusterServiceVersionPrefix = "gpu-operator"
+	// Matched as a substring: the certified operator publishes "NVIDIA Corporation".
+	gpuOperatorProviderSubstring = "NVIDIA"
 
 	// minGPUDriverMajor is the minimum NVIDIA driver major version that supports
 	// the MPS memory and compute limit behavior gpu-fractioning depends on.
@@ -276,10 +278,19 @@ func (c GpuOperatorDependencyChecker) clusterServiceVersionGPUOperatorVersion(ct
 	}
 
 	for _, csv := range list.Items {
-		if strings.HasPrefix(csv.GetName(), clusterServiceVersionPrefix) {
-			version, _, _ := unstructured.NestedString(csv.Object, "spec", "version")
-			return strings.TrimSpace(version), true, nil
+		if !strings.HasPrefix(csv.GetName(), clusterServiceVersionPrefix) {
+			continue
 		}
+		// The name prefix is not unique to NVIDIA, and another vendor's version
+		// says nothing about the operand versions this floor stands in for.
+		// Excluded only on a declared provider that is not NVIDIA: the field is
+		// optional, so its absence must not stop a genuine CSV being gated.
+		provider, found, _ := unstructured.NestedString(csv.Object, "spec", "provider", "name")
+		if found && provider != "" && !strings.Contains(strings.ToUpper(provider), gpuOperatorProviderSubstring) {
+			continue
+		}
+		version, _, _ := unstructured.NestedString(csv.Object, "spec", "version")
+		return strings.TrimSpace(version), true, nil
 	}
 
 	return "", false, nil
