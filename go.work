@@ -6,8 +6,8 @@ go 1.26.4
 use (
 	.
 	./api
+	./fractioning-manager/metricsd
 	./operator
 	./pkg
-	./fractioning-manager/metricsd
 	./test/e2e
 )
