@@ -221,7 +221,7 @@ github.com/go-openapi/swag/yamlutils
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/go-openapi/swag
-    Version:      v0.28.0
+    Version:      v0.27.1
     Source:       https://github.com/go-openapi/swag
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
@@ -245,7 +245,7 @@ github.com/google/uuid
     License:      LICENSE [text 0a8d61ed3cbf]
 
 github.com/grpc-ecosystem/grpc-gateway/v2
-    Version:      v2.30.0
+    Version:      v2.29.0
     Source:       https://github.com/grpc-ecosystem/grpc-gateway/v2
     Linked into:  operator
     License:      LICENSE [text a15b1d1b1689]
@@ -359,7 +359,7 @@ go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
-    Version:      v1.46.0
+    Version:      v1.45.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -645,7 +645,7 @@ text cfc7749b96f6 — applies to:
     github.com/go-openapi/swag/stringutils@v0.28.0 (LICENSE)
     github.com/go-openapi/swag/typeutils@v0.28.0 (LICENSE)
     github.com/go-openapi/swag/yamlutils@v0.28.0 (LICENSE)
-    github.com/go-openapi/swag@v0.28.0 (LICENSE)
+    github.com/go-openapi/swag@v0.27.1 (LICENSE)
     google.golang.org/genproto/googleapis/api@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
     google.golang.org/genproto/googleapis/rpc@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
     google.golang.org/grpc@v1.83.2 (LICENSE)
@@ -1125,7 +1125,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ------------------------------------------------------------------------------
 text 1ae07514be1d — applies to:
     go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.70.0 (LICENSE)
-    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.46.0 (LICENSE)
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.45.0 (LICENSE)
     go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/metric@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/sdk@v1.46.0 (LICENSE)
@@ -3594,7 +3594,7 @@ limitations under the License.
 
 ------------------------------------------------------------------------------
 text a15b1d1b1689 — applies to:
-    github.com/grpc-ecosystem/grpc-gateway/v2@v2.30.0 (LICENSE)
+    github.com/grpc-ecosystem/grpc-gateway/v2@v2.29.0 (LICENSE)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2015, Gengo, Inc.
