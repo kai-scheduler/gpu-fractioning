@@ -1,13 +1,13 @@
 // Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-go 1.26.4
+go 1.26.9
 
 use (
 	.
 	./api
+	./fractioning-manager/metricsd
 	./operator
 	./pkg
-	./fractioning-manager/metricsd
 	./test/e2e
 )
