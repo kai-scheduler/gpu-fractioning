@@ -103,6 +103,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   [`docs/fips/README.md`](docs/fips/README.md) for scope — this covers the Go
   cryptography in binaries built from this repository, not base-image OS crypto
   or libraries loaded from the host driver stack.
+- Releases from this point on also tag the Helm chart without the `v` prefix,
+  so semver ranges such as `--version "~0.1.0"` resolve. Earlier releases are
+  not backfilled.
 
 ### Changed
 - All four images move to new base images. `operator` and `fractiond` move from
