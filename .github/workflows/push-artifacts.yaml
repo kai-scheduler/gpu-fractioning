@@ -82,6 +82,16 @@ jobs:
           helm package operator/charts --version "$VERSION" --app-version "$VERSION" -d ./dist
           helm push "./dist/gpu-fractioning-$VERSION.tgz" "oci://${CHART_REPO_NAMESPACE}"
 
+      - name: Set up ORAS
+        if: startsWith(steps.setup.outputs.version, 'v')
+        uses: oras-project/setup-oras@v2
+
+      - name: Tag Helm Chart without v prefix
+        if: startsWith(steps.setup.outputs.version, 'v')
+        run: |
+          VERSION="${{ steps.setup.outputs.version }}"
+          oras tag "${CHART_REPO_NAMESPACE}/gpu-fractioning:$VERSION" "${VERSION#v}"
+
   # FIPS variants are built whenever a version is supplied, which means releases
   # and manual runs but not pushes to main. Doubling every image build on each
   # push isn't worth the runner time — the consumers who need FIPS pull tagged
