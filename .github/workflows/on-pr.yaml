@@ -5,7 +5,7 @@ name: PR Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   push:
     branches: [main]
 

@@ -5,7 +5,7 @@ name: Chart Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - 'operator/charts/**'
       - '.github/workflows/chart-validate.yaml'
