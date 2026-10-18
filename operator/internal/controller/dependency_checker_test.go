@@ -225,9 +225,10 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
 		},
 		{
-			// An unset operand with no operator version to fall back on leaves
-			// the effective version unknowable, so it blocks rather than admit a
-			// stack that may not enforce GPU memory limits.
+			// An unset operand with no operator version to fall back on — no
+			// label and no ClusterServiceVersion either — leaves the effective
+			// version unknowable, so it blocks rather than admit a stack that may
+			// not enforce GPU memory limits.
 			name:  "unset operand version with no GPU Operator version label blocks Ready",
 			input: trueReady,
 			objects: []client.Object{
@@ -236,6 +237,54 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
 			expectedMessage: "is missing",
+		},
+		{
+			// The OLM shape: a ClusterPolicy created from the bundle, so present
+			// but unlabelled and with the operands left at the operator's
+			// defaults. The version is on the ClusterServiceVersion alone, and
+			// reading it there is what keeps a supported OpenShift installation
+			// from being rejected for a version it does publish.
+			name:  "unlabelled ClusterPolicy with an unset operand falls back to the ClusterServiceVersion",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("", "", ""),
+				clusterServiceVersionObject("gpu-operator-certified.v26.7.2", "26.7.2"),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// The fallback resolves the version, it does not excuse it: the same
+			// shape on an old operator still blocks.
+			//
+			// The message must name the CSV and its version. Asserting only that
+			// it blocks would pass without the fallback too, since an unlabelled
+			// ClusterPolicy blocks either way — just for the wrong reason, a
+			// missing label rather than the old version that is really there.
+			name:  "unlabelled ClusterPolicy on an old ClusterServiceVersion blocks Ready",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("", "", ""),
+				clusterServiceVersionObject("gpu-operator-certified.v26.3.3", "26.3.3"),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
+			expectedMessage: "version 26.3.3 from ClusterServiceVersion is below minimum",
+		},
+		{
+			// A labelled ClusterPolicy is authoritative, so a stale CSV left by
+			// an earlier OLM revision must not override a version the GPU
+			// Operator is reporting about itself.
+			name:  "ClusterPolicy version label wins over the ClusterServiceVersion",
+			input: trueReady,
+			objects: []client.Object{
+				clusterPolicyOperandObject("v26.7.1", "", ""),
+				clusterServiceVersionObject("gpu-operator-certified.v26.3.3", "26.3.3"),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
 			// The bypass returns before any version is read, so it covers the

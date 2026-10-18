@@ -56,6 +56,30 @@ fullnameOverride: ""
 # provides NVIDIA GPU/NVML access.
 runtimeClassName: "nvidia"
 
+# openshift covers what an OpenShift cluster needs beyond a stock Kubernetes
+# install: a SecurityContextConstraints for the daemons, and CRI-O's socket path
+# instead of containerd's.
+openshift:
+  # enabled selects the OpenShift-specific resources and defaults.
+  #
+  #   auto  - detect by the presence of the security.openshift.io/v1 API group
+  #           (default)
+  #   true  - render them regardless
+  #   false - never render them
+  #
+  # Detection reads the cluster's API groups, so it is correct for a normal
+  # `helm install` against a live cluster. It is not available to `helm template`,
+  # which populates capabilities from the local Helm build: rendering OpenShift
+  # manifests off-cluster needs enabled=true, as does any install that reaches
+  # the cluster only as already-rendered YAML.
+  enabled: auto
+  securityContextConstraints:
+    # The daemons run privileged, with host PID and host path mounts, which
+    # restricted-v2 forbids — so on OpenShift the DaemonSets otherwise roll out
+    # to zero pods. Disable only to supply your own SCC and `use` grant for the
+    # daemon ServiceAccount; the daemons are not admissible without one.
+    create: true
+
 # daemonTolerations are the tolerations on the fractiond and mpsd DaemonSets,
 # which run on the GPU nodes selected by the CR's spec.nodeSelector. The
 # chart-level `tolerations` below applies to the controller Deployment instead.
@@ -110,6 +134,25 @@ mpsd:
   # server that containers opt into via the gpu-compute.mode: sm-sharing
   # annotation.
   auditLog: true
+
+# fractioningAgent configures the fractiond DaemonSet on the generated CR.
+fractioningAgent:
+  # logLevel for fractiond. Empty keeps the operator's default.
+  logLevel: ""
+  # criSocketPath is the CRI runtime socket fractiond uses to stop containers
+  # during retroactive enforcement — the mechanism that catches containers which
+  # bypassed the NRI plugin and would otherwise use GPU memory unfenced.
+  #
+  # Empty resolves to CRI-O's socket on OpenShift and leaves the CR field unset
+  # elsewhere, where the API server defaults it to containerd's. Set this
+  # explicitly for any other runtime, or for a non-standard socket location.
+  #
+  # Worth getting right even though nothing fails loudly if it is wrong: only
+  # the socket's parent directory is mounted, and with DirectoryOrCreate, so a
+  # path that does not exist is created empty rather than refused. fractiond
+  # starts and injects fractions normally, and retroactive enforcement silently
+  # never fires.
+  criSocketPath: ""
 
 metricsAgent:
   enabled: true

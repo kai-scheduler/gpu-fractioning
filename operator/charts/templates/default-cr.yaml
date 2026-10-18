@@ -21,14 +21,17 @@ spec:
   {{- if hasKey .Values "runtimeClassName" }}
   runtimeClassName: {{ .Values.runtimeClassName | quote }}
   {{- end }}
-  # Present (even if empty) so the API server applies field-level defaults such
-  # as fractioningAgent.retroactiveEnforcement=true.
-  {{- if and .Values.fractioningAgent .Values.fractioningAgent.logLevel }}
-  fractioningAgent:
-    logLevel: {{ .Values.fractioningAgent.logLevel | quote }}
-  {{- else }}
-  fractioningAgent: {}
+  {{- $agent := dict }}
+  {{- with (.Values.fractioningAgent).logLevel }}
+  {{- $_ := set $agent "logLevel" . }}
   {{- end }}
+  {{- with (include "gpu-fractioning.criSocketPath" $) }}
+  {{- $_ := set $agent "criSocketPath" . }}
+  {{- end }}
+  # Present (even if empty) so the API server applies field-level defaults such
+  # as fractioningAgent.retroactiveEnforcement=true. An explicit null would not
+  # do: the API server defaults an absent object, not one set to null.
+  fractioningAgent:{{- if $agent }}{{ toYaml $agent | nindent 4 }}{{- else }} {}{{- end }}
   metricsAgent:
     enabled: {{ .Values.metricsAgent.enabled }}
     {{- if .Values.metricsAgent.logLevel }}

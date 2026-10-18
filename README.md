@@ -164,6 +164,9 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 | Value | Default | Purpose |
 |-------|---------|---------|
 | `runtimeClassName` | `nvidia` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access; set `""` to use a node default runtime with NVIDIA GPU/NVML access. Ignored where the GPU Operator runs its NRI plugin, which deletes the RuntimeClass — see [above](#running-the-gpu-operator-with-its-nri-plugin) |
+| `openshift.enabled` | `auto` | render the OpenShift-specific resources and defaults. `auto` detects the `security.openshift.io/v1` API group; `true` forces them on, which `helm template` and other off-cluster renders need; `false` forces them off. See [OpenShift](#openshift) |
+| `openshift.securityContextConstraints.create` | `true` | create the `SecurityContextConstraints` the daemons are admitted under, and the `use` grant for the daemon ServiceAccount. Disable only to supply your own — the daemons are not admissible without one |
+| `fractioningAgent.criSocketPath` | `""` | CRI runtime socket fractiond dials to stop containers during retroactive enforcement. Empty resolves to CRI-O's socket on OpenShift and leaves the field to its containerd default elsewhere; set it for any other runtime or a non-standard location |
 | `supportSmSharing` | `true` | installation-time toggle for the `sm-sharing` compute mode (mpsd's shared MPS server + fractiond's routing to it); disable it to revert to pre-feature behaviour without a code rollback, and the `gpu-compute.mode: sm-sharing` annotation is rejected like any other invalid value. Applies to containers created afterwards — stop sm-sharing workloads and drain the shared server before disabling |
 | `skipGpuStackVersionChecks` | `false` | escape hatch that bypasses the NVIDIA GPU stack version gates (GPU Operator, container toolkit, device plugin) when the operator misreads a supported installation and refuses to roll out. It disables verification only — an unsupported GPU stack then rolls out with `Ready` True and nothing reporting the problem. The NVIDIA driver check is separate and is not bypassed |
 | `crdUpgrader.enabled` | `true` | run the `pre-install`/`pre-upgrade` hook Job that applies the `GpuFractioningConfig` CRD, which is how a schema change reaches an existing install — Helm does not update a chart's `crds/` on upgrade. Disable only if you apply the CRD yourself; see [Upgrading](#upgrading) |
@@ -175,6 +178,24 @@ Common chart values (see [`operator/charts/values.yaml`](operator/charts/values.
 | `global.fipsMode` | `off` | `on` deploys the FIPS 140-3 image variants (`<version>-fips`); `only` also enforces FIPS at runtime, for assessment rather than production. See [FIPS 140-3](docs/fips/README.md) |
 
 > The GPU **nodeSelector** for the DaemonSets is set on the `GpuFractioningConfig` CR (`spec.nodeSelector`), not the chart-level `nodeSelector`. Likewise `daemonTolerations` is the DaemonSets' tolerations (via `spec.tolerations`), while the chart-level `tolerations` applies to the controller Deployment.
+
+### OpenShift
+
+The install command is the same. The chart detects OpenShift by the presence of the `security.openshift.io/v1` API group and then:
+
+- creates a `SecurityContextConstraints` and grants `use` of it to the daemon ServiceAccount. fractiond and mpsd run privileged with host PID and host path mounts, which `restricted-v2` forbids — without the grant the DaemonSets are created and no pods ever appear, reported as a `FailedCreate` event on the DaemonSet rather than on the CR. The SCC is narrower than the built-in `privileged`: host network, host ports and host IPC stay off. The controller is unaffected and stays on `restricted-v2`.
+- sets `fractioningAgent.criSocketPath` to CRI-O's socket, `/run/crio/crio.sock`, in place of the containerd default.
+
+Detection reads the cluster's API groups, so it needs no flag for a normal `helm install`. It is not available to `helm template`, which populates capabilities from the local Helm binary: rendering OpenShift manifests off-cluster — GitOps, an air-gapped bundle, `helm template | kubectl apply` — needs `--set openshift.enabled=true`.
+
+Confirm the daemons were admitted under the right SCC, which OpenShift records on the pod:
+
+```sh
+kubectl -n gpu-fractioning get pod -l app.kubernetes.io/component=fractiond \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.openshift\.io/scc}{"\n"}{end}'
+```
+
+Where the GPU Operator was installed through OLM rather than Helm, its `ClusterPolicy` carries no `app.kubernetes.io/version` label and pins no operand versions. The operator resolves its version from the OLM `ClusterServiceVersion` instead, so an OLM install satisfies the GPU stack version gate without being labelled by hand.
 
 ### Upgrading
 

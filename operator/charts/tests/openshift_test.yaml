@@ -1,0 +1,200 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The SCC and the CRI socket path are asserted together because they are two
+# halves of one platform decision: an install that creates the SCC but leaves
+# fractiond pointed at containerd's socket admits the daemons and then silently
+# never enforces retroactively, which is harder to notice than either consistent
+# outcome.
+#
+# The release name is pinned so fullname resolves to a plain "gpu-fractioning"
+# rather than helm-unittest's default RELEASE-NAME prefix.
+suite: OpenShift support
+templates:
+  - scc.yaml
+  - default-cr.yaml
+release:
+  name: gpu-fractioning
+  namespace: gpu-fractioning
+tests:
+  - it: renders no SCC on a cluster without the OpenShift API group
+    template: scc.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves criSocketPath unset on a cluster without the OpenShift API group
+    template: default-cr.yaml
+    asserts:
+      # Absent, not empty: the API server defaults the field to containerd's
+      # socket only when the CR omits it.
+      - notExists:
+          path: spec.fractioningAgent.criSocketPath
+      # The object itself must still be present for that defaulting to happen,
+      # and for retroactiveEnforcement to default to true along with it.
+      - exists:
+          path: spec.fractioningAgent
+
+  - it: detects OpenShift from the security.openshift.io API group
+    template: scc.yaml
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    asserts:
+      - hasDocuments:
+          count: 3
+      - containsDocument:
+          kind: SecurityContextConstraints
+          apiVersion: security.openshift.io/v1
+          name: gpu-fractioning-daemon
+        documentIndex: 0
+      - containsDocument:
+          kind: Role
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: gpu-fractioning-daemon-scc
+          namespace: gpu-fractioning
+        documentIndex: 1
+      - containsDocument:
+          kind: RoleBinding
+          apiVersion: rbac.authorization.k8s.io/v1
+          name: gpu-fractioning-daemon-scc
+          namespace: gpu-fractioning
+        documentIndex: 2
+
+  - it: grants the SCC to the daemon ServiceAccount only
+    template: scc.yaml
+    documentIndex: 2
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    asserts:
+      # The controller runs unprivileged under restricted-v2, so its
+      # ServiceAccount must not appear here.
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: gpu-fractioning-daemon
+              namespace: gpu-fractioning
+
+  - it: permits what the daemons need and nothing more
+    template: scc.yaml
+    documentIndex: 0
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    asserts:
+      - equal:
+          path: allowPrivilegedContainer
+          value: true
+      - equal:
+          path: allowHostPID
+          value: true
+      - equal:
+          path: allowHostDirVolumePlugin
+          value: true
+      # No gpu-fractioning daemon uses these, and the built-in `privileged` SCC
+      # would have granted all three.
+      - equal:
+          path: allowHostNetwork
+          value: false
+      - equal:
+          path: allowHostPorts
+          value: false
+      - equal:
+          path: allowHostIPC
+          value: false
+      # An unset priority sorts last, so this SCC is never auto-selected for an
+      # unrelated pod that happens to be admissible under it.
+      - notExists:
+          path: priority
+
+  - it: sets the CRI-O socket path on OpenShift
+    template: default-cr.yaml
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    asserts:
+      - equal:
+          path: spec.fractioningAgent.criSocketPath
+          value: /run/crio/crio.sock
+
+  - it: renders the OpenShift resources when forced without the API group
+    # The `helm template` case: capabilities come from the local Helm build, so
+    # detection cannot work when rendering OpenShift manifests off-cluster.
+    set:
+      openshift.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+        template: scc.yaml
+      - equal:
+          path: spec.fractioningAgent.criSocketPath
+          value: /run/crio/crio.sock
+        template: default-cr.yaml
+
+  - it: skips the OpenShift resources when explicitly disabled on OpenShift
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    set:
+      openshift.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: scc.yaml
+      - notExists:
+          path: spec.fractioningAgent.criSocketPath
+        template: default-cr.yaml
+
+  - it: keeps the CRI-O default when the SCC is supplied externally
+    # securityContextConstraints.create is only about who owns the SCC object.
+    # It must not also revert the socket path, which is still wrong by default.
+    template: default-cr.yaml
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    set:
+      openshift.securityContextConstraints.create: false
+    asserts:
+      - equal:
+          path: spec.fractioningAgent.criSocketPath
+          value: /run/crio/crio.sock
+
+  - it: prefers an explicit criSocketPath over the OpenShift default
+    template: default-cr.yaml
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    set:
+      fractioningAgent.criSocketPath: /var/run/crio/crio.sock
+    asserts:
+      - equal:
+          path: spec.fractioningAgent.criSocketPath
+          value: /var/run/crio/crio.sock
+
+  - it: carries logLevel and criSocketPath together
+    # They share one rendered object, so setting either must not drop the other.
+    template: default-cr.yaml
+    capabilities:
+      apiVersions:
+        - security.openshift.io/v1
+    set:
+      fractioningAgent.logLevel: debug
+    asserts:
+      - equal:
+          path: spec.fractioningAgent.logLevel
+          value: debug
+      - equal:
+          path: spec.fractioningAgent.criSocketPath
+          value: /run/crio/crio.sock
+
+  - it: fails the render on an unrecognised openshift.enabled
+    # Failing loudly beats falling through to the non-OpenShift path, where the
+    # daemons would never schedule and nothing would say why.
+    template: scc.yaml
+    set:
+      openshift.enabled: "yes"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'openshift.enabled must be "auto", true or false, got "yes"'

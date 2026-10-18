@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -102,6 +103,24 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 	podSpec.NodeSelector = daemonmgr.DaemonNodeSelector(opts.NodeSelector)
 	podSpec.Tolerations = opts.Tolerations
 	podSpec.HostPID = true
+	// Neither fractiond nor the metricsd sidecar calls the Kubernetes API, so
+	// this is set for identity rather than access, and the token is left
+	// unmounted below.
+	//
+	// The identity is what OpenShift admits the pod against: a
+	// SecurityContextConstraints is granted to a ServiceAccount, and these pods
+	// are privileged with host PID and host path mounts, which no default SCC
+	// permits. Running as the namespace's default ServiceAccount, as this did,
+	// leaves the DaemonSet rolled out to zero pods on OpenShift — reported as a
+	// FailedCreate event on the DaemonSet, with nothing on the CR to explain it.
+	// Granting the default ServiceAccount that SCC instead would privilege every
+	// pod in the namespace that happens to use it.
+	podSpec.ServiceAccountName = opts.ServiceAccountName
+	// Declining the token keeps the property that made the default ServiceAccount
+	// look reasonable here: no API credential is mounted into a pod that has no
+	// business calling the API. SCC admission reads the ServiceAccount name, not
+	// the token, so this costs nothing on OpenShift.
+	podSpec.AutomountServiceAccountToken = ptr.To(false)
 
 	fractiondContainer, fractiondVolumes := d.buildFractiondContainer(opts)
 	podSpec.Volumes = append(podSpec.Volumes, fractiondVolumes...)

@@ -191,9 +191,14 @@ func (c GpuOperatorDependencyChecker) managementCDINamespaceFailureMessage(clust
 // all — including the ClusterServiceVersion list, whose failure would otherwise
 // block Ready over a version nothing is going to check.
 //
-// clusterPolicy may be nil: OpenShift installations may not expose the NVIDIA
-// ClusterPolicy CR, and the OLM ClusterServiceVersion is then the only source
-// of the installed GPU Operator version.
+// Where the GPU Operator version is needed, it is read from the ClusterPolicy's
+// version label, falling back to the OLM ClusterServiceVersion when that label
+// is missing.
+//
+// The fallback is not conditional on the ClusterPolicy being absent, because an
+// OLM installation creates a ClusterPolicy but puts no version label on it. Such
+// an installation would otherwise be reported as having no version at all, while
+// its ClusterServiceVersion says exactly which version is running.
 func (c GpuOperatorDependencyChecker) versionFailure(ctx context.Context, clusterPolicy *unstructured.Unstructured) (reason, message string, err error) {
 	if c.skipVersionChecks {
 		return "", "", nil
@@ -204,35 +209,90 @@ func (c GpuOperatorDependencyChecker) versionFailure(ctx context.Context, cluste
 		if msg != "" {
 			return daemonmgr.ReasonGPUOperandVersionUnsupported, msg, nil
 		}
+		// Every operand is pinned and within its floor, so the operator version
+		// determines nothing here and is not consulted.
+		if len(defaulted) == 0 {
+			return "", "", nil
+		}
+
 		// An operand left off the ClusterPolicy runs the GPU Operator's own
 		// default, so the operator version is what determines it — the one case
 		// on this path where that version is evidence of anything.
-		if len(defaulted) > 0 {
-			version := gpuOperatorVersionFromClusterPolicy(clusterPolicy)
-			if msg := gpuOperatorVersionFailureMessage(version, fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)); msg != "" {
-				return daemonmgr.ReasonGPUOperatorVersionUnsupported,
-					fmt.Sprintf("%s, and it supplies the default %s version that the ClusterPolicy leaves unset",
-						msg, strings.Join(defaulted, " and ")), nil
+		//
+		// found is ignored: a defaulted operand needs a version, so no version
+		// found anywhere is itself the failure, reported as missing.
+		version, source, _, err := c.gpuOperatorVersion(ctx, clusterPolicy)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", "", err
 			}
+			return daemonmgr.ReasonGPUOperatorNotReady, versionDiscoveryErrorMessage(err), nil
+		}
+		if msg := gpuOperatorVersionFailureMessage(version, source); msg != "" {
+			return daemonmgr.ReasonGPUOperatorVersionUnsupported,
+				fmt.Sprintf("%s, and it supplies the default %s version that the ClusterPolicy leaves unset",
+					msg, strings.Join(defaulted, " and ")), nil
 		}
 		return "", "", nil
 	}
 
-	version, found, err := c.clusterServiceVersionGPUOperatorVersion(ctx)
+	version, source, found, err := c.gpuOperatorVersion(ctx, clusterPolicy)
 	if err != nil {
 		if ctx.Err() != nil {
 			return "", "", err
 		}
-		return daemonmgr.ReasonGPUOperatorNotReady,
-			fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err), nil
+		return daemonmgr.ReasonGPUOperatorNotReady, versionDiscoveryErrorMessage(err), nil
 	}
+	// With no ClusterPolicy and no ClusterServiceVersion there is no version
+	// source on the cluster at all, which is not evidence of an unsupported
+	// version. The gate is skipped rather than failed.
 	if !found {
 		return "", "", nil
 	}
-	if msg := gpuOperatorVersionFailureMessage(version, "ClusterServiceVersion"); msg != "" {
+	if msg := gpuOperatorVersionFailureMessage(version, source); msg != "" {
 		return daemonmgr.ReasonGPUOperatorVersionUnsupported, msg, nil
 	}
 	return "", "", nil
+}
+
+// gpuOperatorVersion resolves the GPU Operator's own version, along with the
+// source to name in a failure message so the reader knows which object to go and
+// look at.
+//
+// The ClusterPolicy's version label is preferred and the OLM
+// ClusterServiceVersion is the fallback, including when a ClusterPolicy exists
+// but carries no label — which is what an OLM installation produces.
+//
+// found reports whether any source yielded a version. Callers differ on what its
+// absence means, which is why it is returned rather than decided here: with no
+// ClusterPolicy it means the cluster has no version source and the gate does not
+// apply, while with one it means a version that was needed could not be found.
+//
+// clusterPolicy may be nil.
+func (c GpuOperatorDependencyChecker) gpuOperatorVersion(ctx context.Context, clusterPolicy *unstructured.Unstructured) (version, source string, found bool, err error) {
+	// Returned unconditionally where a ClusterPolicy exists, so that a version
+	// found nowhere is reported against the label an admin can actually set
+	// rather than against a ClusterServiceVersion that may not exist.
+	source = "ClusterServiceVersion"
+	if clusterPolicy != nil {
+		source = fmt.Sprintf("ClusterPolicy label %q", clusterPolicyVersionLabel)
+		if version := gpuOperatorVersionFromClusterPolicy(clusterPolicy); version != "" {
+			return version, source, true, nil
+		}
+	}
+
+	csvVersion, csvFound, err := c.clusterServiceVersionGPUOperatorVersion(ctx)
+	if err != nil {
+		return "", source, false, err
+	}
+	if !csvFound {
+		return "", source, false, nil
+	}
+	return csvVersion, "ClusterServiceVersion", true, nil
+}
+
+func versionDiscoveryErrorMessage(err error) string {
+	return fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err)
 }
 
 // GpuDriverDependencyChecker checks the gpu-fractioning-owned NVIDIA driver
@@ -329,6 +389,9 @@ func clusterPolicyReadinessFailureMessage(clusterPolicy *unstructured.Unstructur
 // label. It is consulted only to resolve an operand the ClusterPolicy leaves
 // unset, where the operator's build default is the effective version; a pinned
 // operand is compared directly and this label is not read.
+//
+// Returns empty for an unlabelled ClusterPolicy, which is what OLM creates.
+// Callers fall back to the ClusterServiceVersion.
 func gpuOperatorVersionFromClusterPolicy(clusterPolicy *unstructured.Unstructured) string {
 	return strings.TrimSpace(clusterPolicy.GetLabels()[clusterPolicyVersionLabel])
 }
@@ -351,8 +414,12 @@ func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
 	// v26.7.1-rc.1 satisfies a v26.7.1 floor while v26.7.0-rc.1 does not.
 	versionCore, _ := splitSemverSuffix(version)
 	if semver.Compare(versionCore, minimumGPUOperatorVersion) < 0 {
-		return fmt.Sprintf("NVIDIA GPU Operator version %s is below minimum supported version %s",
-			rawVersion, minimumGPUOperatorVersion)
+		// Named like the other two branches. Two sources now reach this one on
+		// the ClusterPolicy path — its version label and the ClusterServiceVersion
+		// behind it — so a bare version leaves the reader guessing which object
+		// to go and look at.
+		return fmt.Sprintf("NVIDIA GPU Operator version %s from %s is below minimum supported version %s",
+			rawVersion, source, minimumGPUOperatorVersion)
 	}
 
 	return ""

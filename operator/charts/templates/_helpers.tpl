@@ -125,6 +125,68 @@ then delete them out from under the running operator.
 {{- end }}
 
 {{/*
+Whether to render the OpenShift-specific resources, as "true" or "" so callers
+can use it directly in an if.
+
+Resolved in one place because three things key off it (the SCC, its RBAC and the
+CRI socket default) and they must not disagree: an install that creates the SCC
+but keeps the containerd socket path, or vice versa, is worse than either
+consistent outcome.
+
+"auto" detects OpenShift by the presence of the security.openshift.io/v1 API
+group, which is what serves SecurityContextConstraints — the capability actually
+being used, rather than a proxy for it like a cluster version or node label.
+
+The explicit override exists because detection is only as good as .Capabilities,
+which `helm template` populates from the local Helm build rather than a cluster.
+Rendering manifests for OpenShift from a non-OpenShift machine (GitOps, an
+air-gapped bundle, `helm template | kubectl apply`) therefore needs
+openshift.enabled=true, and that is the common case for both, not an edge case.
+*/}}
+{{- define "gpu-fractioning.isOpenShift" -}}
+{{- $raw := (.Values.openshift).enabled -}}
+{{- /* Not `default "auto" $raw`: Helm's default treats false as empty, which
+       would silently turn openshift.enabled=false back into auto-detection. */ -}}
+{{- $enabled := "auto" -}}
+{{- if not (kindIs "invalid" $raw) -}}
+{{- $enabled = printf "%v" $raw -}}
+{{- end -}}
+{{- if not (has $enabled (list "auto" "true" "false")) -}}
+{{- fail (printf "openshift.enabled must be \"auto\", true or false, got %q" $enabled) -}}
+{{- end -}}
+{{- if eq $enabled "auto" -}}
+{{- if .Capabilities.APIVersions.Has "security.openshift.io/v1" -}}true{{- end -}}
+{{- else if eq $enabled "true" -}}
+true
+{{- end -}}
+{{- end }}
+
+{{/*
+The CRI socket path for the generated CR, or nothing to leave the field unset
+and let the API server default it to containerd's socket.
+
+An explicit value always wins. Otherwise OpenShift gets CRI-O's socket, since
+that is the runtime it ships and the containerd default is simply wrong there.
+*/}}
+{{- define "gpu-fractioning.criSocketPath" -}}
+{{- $path := (.Values.fractioningAgent).criSocketPath -}}
+{{- if $path -}}
+{{- $path -}}
+{{- else if include "gpu-fractioning.isOpenShift" . -}}
+/run/crio/crio.sock
+{{- end -}}
+{{- end }}
+
+{{/*
+Name of the SecurityContextConstraints and the Role/RoleBinding that grants use
+of it. SCCs are cluster-scoped, so this must not collide between releases in
+different namespaces.
+*/}}
+{{- define "gpu-fractioning.sccName" -}}
+{{- printf "%s-daemon" (include "gpu-fractioning.fullname" . | trunc 56 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
 Daemon service account name.
 */}}
 {{- define "gpu-fractioning.daemonServiceAccountName" -}}
