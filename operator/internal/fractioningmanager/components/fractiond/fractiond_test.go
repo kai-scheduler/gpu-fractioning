@@ -43,15 +43,9 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	if !spec.HostPID {
 		t.Error("expected HostPID=true")
 	}
-	// Set for identity, not access: OpenShift admits a privileged pod against the
-	// SecurityContextConstraints granted to its ServiceAccount, so the default
-	// ServiceAccount leaves this DaemonSet at zero pods there.
 	if spec.ServiceAccountName != testDaemonServiceAccountName {
 		t.Errorf("serviceAccountName = %q, expected %s", spec.ServiceAccountName, testDaemonServiceAccountName)
 	}
-	// Neither container calls the Kubernetes API, so no token is mounted. SCC
-	// admission reads the name above, not the token, so declining it costs
-	// nothing.
 	if spec.AutomountServiceAccountToken == nil || *spec.AutomountServiceAccountToken {
 		t.Error("expected automountServiceAccountToken=false")
 	}

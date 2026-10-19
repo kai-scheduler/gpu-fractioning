@@ -4,35 +4,19 @@ SPDX-License-Identifier: Apache-2.0
 */}}
 {{- if and (include "gpu-fractioning.isOpenShift" .) .Values.openshift.securityContextConstraints.create }}
 {{- $name := include "gpu-fractioning.sccName" . }}
-# OpenShift admits pods only against a SecurityContextConstraints the pod's
-# ServiceAccount may use, and the default restricted-v2 permits none of what the
-# daemons need: mpsd and fractiond run privileged, with host PID, and mount host
-# paths to reach the MPS pipe directory and the NRI and CRI sockets.
-#
-# Without this the DaemonSets are created and no pods appear. The reason is a
-# FailedCreate event on the DaemonSet rather than anything on the CR, so the
-# operator reports the daemons as not ready without saying why.
-#
-# Only the daemon ServiceAccount is granted this. The controller stays on
-# restricted-v2: its pod is runAsNonRoot with allowPrivilegeEscalation false and
-# all capabilities dropped.
+# mpsd and fractiond run privileged, with host PID, and mount host paths for the
+# MPS pipe directory and the NRI and CRI sockets — none of which restricted-v2
+# permits. Granted to the daemon ServiceAccount only; the controller is
+# unprivileged and stays on restricted-v2.
 apiVersion: security.openshift.io/v1
 kind: SecurityContextConstraints
 metadata:
   name: {{ $name }}
   labels:
     {{- include "gpu-fractioning.labels" . | nindent 4 }}
-# Deliberately narrower than the built-in `privileged` SCC: host network, host
-# ports and host IPC stay off, since no gpu-fractioning daemon uses them.
-#
-# There is no per-path host volume allowlist to set here. `allowedHostPaths` is
-# a PodSecurityPolicy field and the API server prunes it from an SCC, so
-# allowHostDirVolumePlugin is all-or-nothing. The paths the daemons do mount:
-#   spec.fractioningAgent.nriSocketPath  dir   fractiond, NRI socket
-#   spec.fractioningAgent.criSocketPath  dir   fractiond, CRI socket
-#   /run/nvidia-mps                            fractiond and mpsd, MPS pipes
-#   /var/log/nvidia-mps                        mpsd, MPS logs
-#   /var/run/gpu-fractioning/map               fractiond, container to pod map
+# Narrower than the built-in `privileged` SCC. Host paths are all-or-nothing:
+# allowedHostPaths is a PodSecurityPolicy field that the API server prunes from
+# an SCC, so there is no per-path allowlist to set.
 allowPrivilegedContainer: true
 allowPrivilegeEscalation: true
 allowHostDirVolumePlugin: true
@@ -41,9 +25,8 @@ allowHostIPC: false
 allowHostNetwork: false
 allowHostPorts: false
 readOnlyRootFilesystem: false
-# The daemons hold privileged: true, which already implies the full capability
-# set. Granting none by name keeps this from also widening any non-privileged
-# container that later lands under this SCC.
+# privileged: true already implies the full capability set; naming none keeps
+# this from widening a non-privileged container admitted under the same SCC.
 allowedCapabilities: []
 defaultAddCapabilities: []
 requiredDropCapabilities: []
@@ -62,13 +45,10 @@ volumes:
   - configMap
   - downwardAPI
   - emptyDir
-# priority is left unset on purpose. A nil priority sorts last, so this SCC is
-# never preferred for some unrelated pod that happens to be admissible under it;
-# only the RoleBinding below brings it into play.
-#
-# users and groups are empty for the same reason: access is granted through RBAC
-# so it is visible to `kubectl auth can-i` and removed with the release, rather
-# than embedded in the cluster-scoped SCC object.
+# priority is unset on purpose: a nil priority sorts last, so this is never
+# preferred for an unrelated pod that happens to be admissible under it. users
+# and groups stay empty so access comes from the RoleBinding below, where
+# `kubectl auth can-i` can see it and the release owns its lifecycle.
 users: []
 groups: []
 ---

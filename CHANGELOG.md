@@ -9,29 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - OpenShift is now supported by a plain `helm install`, with no platform flag.
   The chart detects it by the presence of the `security.openshift.io/v1` API
-  group and then creates a `SecurityContextConstraints` plus the `use` grant for
-  the daemon ServiceAccount, and points `criSocketPath` at CRI-O's socket. Two
-  things previously had to be done by hand and were documented nowhere: without
-  the SCC, `restricted-v2` refuses the privileged, host-PID daemon pods, so the
-  DaemonSets roll out to zero pods and the reason appears as a `FailedCreate`
-  event on the DaemonSet rather than anywhere on the CR. The SCC is narrower
-  than the built-in `privileged` — host network, host ports and host IPC stay
-  off — and only the daemon ServiceAccount is granted it; the controller is
-  unprivileged and stays on `restricted-v2`. New `openshift.enabled` selects
-  this: `auto` (default) detects, `true` forces it on for `helm template` and
-  other off-cluster renders where `.Capabilities` cannot see the cluster,
-  `false` forces it off, and anything else fails the render rather than
-  silently installing something that cannot start.
+  group, then creates a `SecurityContextConstraints` and grants `use` of it to
+  the daemon ServiceAccount, and points `criSocketPath` at CRI-O's socket. The
+  SCC is narrower than the built-in `privileged` — host network, host ports and
+  host IPC stay off — and only the daemon ServiceAccount is granted it. New
+  `openshift.enabled` overrides detection: `auto` (default), `true` for
+  off-cluster renders such as `helm template`, `false` to opt out.
 - New `fractioningAgent.criSocketPath` value, which resolves to
   `/run/crio/crio.sock` on OpenShift and otherwise leaves the field to its
-  containerd default. There was no way to set it from the chart at all, and
-  nothing fails loudly when it is wrong: only the socket's parent directory is
-  mounted, with `DirectoryOrCreate`, so a missing path is created empty,
-  fractiond starts and injects fractions normally, and retroactive enforcement
-  silently never fires — leaving exactly the containers that bypassed the NRI
-  plugin free to use GPU memory unfenced. The accompanying
-  `fractioningAgent.logLevel` is now documented in `values.yaml`; the CR
-  template already read it.
+  containerd default.
 - The node daemons now get their GPU where the NVIDIA GPU Operator runs its own
   NRI plugin (`cdi.nriPluginEnabled=true`), which deletes the `nvidia`
   RuntimeClass they depended on and left mpsd crash-looping on

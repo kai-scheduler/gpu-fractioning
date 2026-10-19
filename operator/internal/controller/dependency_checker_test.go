@@ -225,10 +225,8 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
 		},
 		{
-			// An unset operand with no operator version to fall back on — no
-			// label and no ClusterServiceVersion either — leaves the effective
-			// version unknowable, so it blocks rather than admit a stack that may
-			// not enforce GPU memory limits.
+			// No label and no ClusterServiceVersion either, so the effective
+			// operand version is unknowable and blocks.
 			name:  "unset operand version with no GPU Operator version label blocks Ready",
 			input: trueReady,
 			objects: []client.Object{
@@ -240,10 +238,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 		},
 		{
 			// The OLM shape: a ClusterPolicy created from the bundle, so present
-			// but unlabelled and with the operands left at the operator's
-			// defaults. The version is on the ClusterServiceVersion alone, and
-			// reading it there is what keeps a supported OpenShift installation
-			// from being rejected for a version it does publish.
+			// but unlabelled with the operands left at the operator's defaults.
 			name:  "unlabelled ClusterPolicy with an unset operand falls back to the ClusterServiceVersion",
 			input: trueReady,
 			objects: []client.Object{
@@ -255,13 +250,9 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			// The fallback resolves the version, it does not excuse it: the same
-			// shape on an old operator still blocks.
-			//
-			// The message must name the CSV and its version. Asserting only that
+			// The message must name the CSV and its version: asserting only that
 			// it blocks would pass without the fallback too, since an unlabelled
-			// ClusterPolicy blocks either way — just for the wrong reason, a
-			// missing label rather than the old version that is really there.
+			// ClusterPolicy blocks either way — just for the wrong reason.
 			name:  "unlabelled ClusterPolicy on an old ClusterServiceVersion blocks Ready",
 			input: trueReady,
 			objects: []client.Object{
@@ -273,9 +264,8 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: "version 26.3.3 from ClusterServiceVersion is below minimum",
 		},
 		{
-			// A labelled ClusterPolicy is authoritative, so a stale CSV left by
-			// an earlier OLM revision must not override a version the GPU
-			// Operator is reporting about itself.
+			// A stale CSV from an earlier OLM revision must not override a
+			// labelled ClusterPolicy.
 			name:  "ClusterPolicy version label wins over the ClusterServiceVersion",
 			input: trueReady,
 			objects: []client.Object{

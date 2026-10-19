@@ -67,17 +67,12 @@ openshift:
   #   true  - render them regardless
   #   false - never render them
   #
-  # Detection reads the cluster's API groups, so it is correct for a normal
-  # `helm install` against a live cluster. It is not available to `helm template`,
-  # which populates capabilities from the local Helm build: rendering OpenShift
-  # manifests off-cluster needs enabled=true, as does any install that reaches
-  # the cluster only as already-rendered YAML.
+  # Detection reads the cluster's API groups, so `helm template` and other
+  # off-cluster renders see nothing and need enabled=true.
   enabled: auto
   securityContextConstraints:
-    # The daemons run privileged, with host PID and host path mounts, which
-    # restricted-v2 forbids — so on OpenShift the DaemonSets otherwise roll out
-    # to zero pods. Disable only to supply your own SCC and `use` grant for the
-    # daemon ServiceAccount; the daemons are not admissible without one.
+    # Disable only to supply your own SCC and `use` grant for the daemon
+    # ServiceAccount; the daemons are not admissible without one.
     create: true
 
 # daemonTolerations are the tolerations on the fractiond and mpsd DaemonSets,
@@ -140,18 +135,13 @@ fractioningAgent:
   # logLevel for fractiond. Empty keeps the operator's default.
   logLevel: ""
   # criSocketPath is the CRI runtime socket fractiond uses to stop containers
-  # during retroactive enforcement — the mechanism that catches containers which
-  # bypassed the NRI plugin and would otherwise use GPU memory unfenced.
+  # during retroactive enforcement. Empty resolves to CRI-O's socket on OpenShift
+  # and leaves the CR field unset elsewhere, where the API server defaults it to
+  # containerd's. Set it for any other runtime or socket location.
   #
-  # Empty resolves to CRI-O's socket on OpenShift and leaves the CR field unset
-  # elsewhere, where the API server defaults it to containerd's. Set this
-  # explicitly for any other runtime, or for a non-standard socket location.
-  #
-  # Worth getting right even though nothing fails loudly if it is wrong: only
-  # the socket's parent directory is mounted, and with DirectoryOrCreate, so a
-  # path that does not exist is created empty rather than refused. fractiond
-  # starts and injects fractions normally, and retroactive enforcement silently
-  # never fires.
+  # A wrong path does not fail loudly: only the socket's parent directory is
+  # mounted, with DirectoryOrCreate, so retroactive enforcement silently never
+  # fires while fractiond otherwise runs normally.
   criSocketPath: ""
 
 metricsAgent:
