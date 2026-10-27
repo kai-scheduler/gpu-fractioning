@@ -1,0 +1,56 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The hook annotations are the mechanism: without pre-delete the Job would run
+# after the operator is gone, and without the delete policies a failed run
+# would collide with the next uninstall attempt.
+suite: config-cleanup hook
+chart:
+  version: 0.1.0
+  appVersion: 0.1.0
+tests:
+  - it: runs the operator image's delete-configs subcommand
+    templates:
+      - hooks/delete/config-cleanup.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ["delete-configs", "--timeout=5m"]
+
+  - it: is a pre-delete hook, cleaned up after it succeeds
+    templates:
+      - hooks/delete/config-cleanup.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation
+
+  - it: grants only read and delete on GpuFractioningConfigs
+    templates:
+      - hooks/delete/config-cleanup-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["gpu-fractioning.kai.scheduler"]
+              resources: ["gpufractioningconfigs"]
+              verbs: ["get", "list", "delete"]
+
+  - it: can be disabled
+    set:
+      configCleanup.enabled: false
+    templates:
+      - hooks/delete/config-cleanup.yaml
+      - hooks/delete/config-cleanup-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

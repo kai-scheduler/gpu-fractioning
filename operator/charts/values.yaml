@@ -175,6 +175,27 @@ crdUpgrader:
       memory: 64Mi
       ephemeral-storage: 100Mi
 
+# configCleanup is the pre-delete hook Job that deletes the GpuFractioningConfig
+# objects before Helm removes the rest of the release. Helm deletes custom
+# resources last, after the operator Deployment, so without this the CR would
+# wait forever on a finalizer nobody removes and the node daemons it owns would
+# keep running.
+configCleanup:
+  # Disable only if you delete the GpuFractioningConfig objects yourself before
+  # `helm uninstall`, while the operator is still running.
+  enabled: true
+  backoffLimit: 1
+  # How long the Job waits for the operator to finish its node cleanup.
+  timeout: 5m
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+      ephemeral-storage: 100Mi
+
 serviceAccount:
   create: true
   name: ""
