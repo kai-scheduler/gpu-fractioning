@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/config"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/configcleanup"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/controller"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/crdupgrade"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
@@ -42,12 +43,19 @@ func init() {
 
 // A subcommand of this binary rather than its own image, so the hook Job runs
 // something already built, scanned and published in a -fips variant.
-const applyCRDsCommand = "apply-crds"
+const (
+	applyCRDsCommand     = "apply-crds"
+	deleteConfigsCommand = "delete-configs"
+)
 
 func main() {
 	// Before ParseFlags, which would reject the subcommand as a stray argument.
 	if len(os.Args) > 1 && os.Args[1] == applyCRDsCommand {
 		runApplyCRDs(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == deleteConfigsCommand {
+		runDeleteConfigs(os.Args[2:])
 		return
 	}
 
@@ -230,4 +238,32 @@ func runApplyCRDs(args []string) {
 		os.Exit(1)
 	}
 	log.Info("CRDs applied")
+}
+
+// runDeleteConfigs deletes every GpuFractioningConfig and waits for the operator
+// to release them. The chart runs it as a pre-delete hook Job, while the
+// operator Deployment still exists to run the finalizer.
+func runDeleteConfigs(args []string) {
+	fs := flag.NewFlagSet(deleteConfigsCommand, flag.ExitOnError)
+	development := fs.Bool("development", false, "Enable development-mode logging (debug level, human-readable).")
+	timeout := fs.Duration("timeout", configcleanup.DefaultTimeout,
+		"How long to wait for the operator to finish its cleanup and the objects to disappear.")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "%s takes no positional arguments, got %q\n", deleteConfigsCommand, fs.Args())
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ctrl.SetLogger(zap.New(zap.UseDevMode(*development)))
+	log := ctrl.Log.WithName(deleteConfigsCommand)
+
+	ctx := ctrl.LoggerInto(ctrl.SetupSignalHandler(), log)
+	if err := configcleanup.Run(ctx, *timeout); err != nil {
+		log.Error(err, "Failed to delete GpuFractioningConfigs")
+		os.Exit(1)
+	}
+	log.Info("GpuFractioningConfigs deleted")
 }

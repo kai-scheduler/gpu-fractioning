@@ -125,6 +125,13 @@ then delete them out from under the running operator.
 {{- end }}
 
 {{/*
+Name of the pre-delete config-cleanup hook Job and its RBAC.
+*/}}
+{{- define "gpu-fractioning.configCleanupName" -}}
+{{- printf "%s-config-cleanup" (include "gpu-fractioning.fullname" . | trunc 48 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
 Whether to render the OpenShift-specific resources, as "true" or "" so callers
 can use it directly in an if.
 
