@@ -86,12 +86,29 @@ func TestProcessorReplace(t *testing.T) {
 
 	p.Synchronize(func() []store.ContainerInfo {
 		return []store.ContainerInfo{{ContainerID: "x"}, {ContainerID: "y"}}
-	})
+	}, false)
 	p.Flush()
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.replaces) != 1 || len(w.replaces[0]) != 2 {
+		t.Fatalf("unexpected replaces: %#v", w.replaces)
+	}
+}
+
+func TestProcessorSkipsReplaceOnlyForEmptyRuntimeSnapshot(t *testing.T) {
+	w := &fakeWriter{}
+	p := newTestProcessor(w, Options{})
+
+	// containerd has not replayed its containers yet: keep the mapping files.
+	p.Synchronize(func() []store.ContainerInfo { return nil }, true)
+	// The runtime has containers, none fractional: the mapping set is really empty.
+	p.Synchronize(func() []store.ContainerInfo { return nil }, false)
+	p.Flush()
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.replaces) != 1 || len(w.replaces[0]) != 0 {
 		t.Fatalf("unexpected replaces: %#v", w.replaces)
 	}
 }
