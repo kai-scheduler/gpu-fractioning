@@ -4,19 +4,18 @@
 fractioningAgent:
   logLevel: debug
 
-# k3d has no real "nvidia" runtime; clear it so daemon pods use the node default.
-# The e2e images provide the fake NVIDIA/NVML pieces they need.
-runtimeClassName: ""
+# Exercise the real toolkit runtime installed by GPU Operator.
+runtimeClassName: nvidia
 
 metricsAgent:
   logLevel: debug
-  # Mount the nvml-mock config so the baked-in libnvidia-ml.so reads the
-  # test-controlled driver/process state via MOCK_NVML_CONFIG at nvmlInit time.
+  # Keep test process data separate from Mokka's CDI mount at /etc/nvml-mock.
+  # Dockerfile.e2e points MOCK_NVML_CONFIG at this test-only directory.
   volumes:
     - name: nvml-mock-cfg
       configMap:
         name: nvml-mock-config
   volumeMounts:
     - name: nvml-mock-cfg
-      mountPath: /etc/nvml-mock
+      mountPath: /etc/gpu-fractioning-test
       readOnly: true

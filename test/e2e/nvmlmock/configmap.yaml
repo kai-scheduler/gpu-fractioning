@@ -1,0 +1,58 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Idle nvml-mock config for the metricsd sidecar (gpu-fractioning namespace).
+# nvmlmock.SetProcesses() updates this ConfigMap and restarts the metricsd pod
+# so the baked-in libnvidia-ml.so re-reads it at nvmlInit time.
+# UUIDs must match Device0UUID/Device1UUID in test/e2e/nvmlmock/nvmlmock.go.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvml-mock-config
+  namespace: gpu-fractioning
+data:
+  config.yaml: |
+    version: "1.0"
+    system:
+      driver_version: "550.163.01"
+      nvml_version: "12.550.163.01"
+      cuda_version: "12.4"
+      cuda_version_major: 12
+      cuda_version_minor: 4
+    device_defaults:
+      name: "NVIDIA A100-SXM4-40GB"
+      brand: "nvidia"
+      architecture: "ampere"
+      compute_capability:
+        major: 8
+        minor: 0
+      memory:
+        total_bytes: 42949672960
+        reserved_bytes: 611319808
+        free_bytes: 42338353152
+        used_bytes: 0
+      utilization:
+        gpu: 0
+        memory: 0
+      compute_mode: "default"
+      persistence_mode: "enabled"
+      performance_state: "P0"
+      ecc:
+        mode_current: "enabled"
+      mig:
+        mode_current: "disabled"
+        max_gpu_instances: 7
+      processes: []
+    devices:
+      - index: 0
+        uuid: "2881be89-519e-4b30-8d25-b9032893e6f9"
+        pci:
+          bus_id: "0000:07:00.0"
+        minor_number: 0
+        processes: []
+      - index: 1
+        uuid: "1a1fb9fb-a857-4986-8b0f-d0d664ba0364"
+        pci:
+          bus_id: "0000:0F:00.0"
+        minor_number: 1
+        processes: []

@@ -28,17 +28,17 @@ env:
   E2E_CLUSTER_NAME: gpu-fractioning-e2e
   E2E_GPU_WORKER_NODES: 2          # GPU worker nodes
   E2E_NON_GPU_WORKER_NODES: 1  # plain (no-GPU) worker nodes, for a mixed topology
-  # Pin to a known-good fake-gpu-operator release. Bump deliberately.
-  E2E_FAKE_GPU_OPERATOR_VERSION: 0.2.0
+  # Pin the real GPU Operator release. Mokka is pinned by the install script.
+  E2E_GPU_OPERATOR_VERSION: v26.7.2
 
 jobs:
   metrics:
     name: Metrics e2e
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ~8 min build+deploy + a ~10-11 min suite (each nvml-mock SetProcesses cycle
     # restarts metricsd and waits ~90 s for the ConfigMap to propagate, ×~11
     # tests). 20 min cut the last test off mid-run; 25 clears it with margin.
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -61,6 +61,8 @@ jobs:
               - 'fractioning-manager/mpsd/**'
               - 'fractioning-manager/fractiond/**'
               - 'test/e2e/**'
+              - 'hack/install-mokka-gpu-operator.sh'
+              - 'hack/e2e-*.yaml'
               - 'skaffold.yaml'
               - '.github/workflows/e2e.yaml'
               - '.github/actions/e2e-setup/**'
@@ -71,7 +73,7 @@ jobs:
 
       # Reclaim runner disk before building/loading images. The runner starts
       # ~79% full (16 GiB free); building the four images and importing them into
-      # each of the k3d nodes' containerd would push it toward the kubelet's
+      # each of the kind nodes' containerd would push it toward the kubelet's
       # disk-pressure threshold and risk image eviction. This keeps ~30 GiB free
       # after everything is loaded (measured), well clear of that threshold —
       # protective headroom, not the fix for any specific failure.
@@ -85,7 +87,7 @@ jobs:
           sudo docker system prune --all --force --volumes || true
           echo "after:"; df -h /
 
-      # Suite-agnostic infra: toolchain + k3d/fake-gpu-operator cluster.
+      # Suite-agnostic infra: toolchain + kind + GPU Operator + Mokka cluster.
       # Reused as-is by future e2e suites (mpsd/fractiond).
       - name: Set up e2e cluster
         if: ${{ steps.changes.outputs.e2e == 'true' }}
@@ -94,9 +96,9 @@ jobs:
           gpu-worker-nodes: ${{ env.E2E_GPU_WORKER_NODES }}
           non-gpu-worker-nodes: ${{ env.E2E_NON_GPU_WORKER_NODES }}
           cluster-name: ${{ env.E2E_CLUSTER_NAME }}
-          fake-gpu-operator-version: ${{ env.E2E_FAKE_GPU_OPERATOR_VERSION }}
+          gpu-operator-version: ${{ env.E2E_GPU_OPERATOR_VERSION }}
 
-      # Skaffold builds the four images, loads them into k3d, and helm-installs
+      # Skaffold builds the four images, loads them into kind, and helm-installs
       # the operator chart; the operator then creates the fractiond DaemonSet
       # (with the metricsd sidecar under test). Waits on the fractiond DaemonSet
       # rollout, not the operator's aggregate Ready.
@@ -133,12 +135,12 @@ jobs:
 
   operator:
     name: Operator e2e
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ~8 min build+deploy + the operator suite (CR delete/recreate rollouts +
     # fault-recovery windows + config re-rolls). The suite's own `go test`
     # timeout is 40m; keep the job comfortably above it so a genuine hang dumps
     # goroutine stacks instead of being killed at the job limit.
-    timeout-minutes: 55
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7
 
@@ -163,6 +165,8 @@ jobs:
               - 'api/**'
               - 'fractioning-manager/mpsd/**'
               - 'test/e2e/**'
+              - 'hack/install-mokka-gpu-operator.sh'
+              - 'hack/e2e-*.yaml'
               - 'skaffold.yaml'
               - '.github/workflows/e2e.yaml'
               - '.github/actions/e2e-setup/**'
@@ -188,7 +192,7 @@ jobs:
           gpu-worker-nodes: ${{ env.E2E_GPU_WORKER_NODES }}
           non-gpu-worker-nodes: ${{ env.E2E_NON_GPU_WORKER_NODES }}
           cluster-name: ${{ env.E2E_CLUSTER_NAME }}
-          fake-gpu-operator-version: ${{ env.E2E_FAKE_GPU_OPERATOR_VERSION }}
+          gpu-operator-version: ${{ env.E2E_GPU_OPERATOR_VERSION }}
 
       # Same deploy as the metrics job. The operator suite waits for aggregate
       # Ready and asserts both managed DaemonSets.
@@ -221,12 +225,12 @@ jobs:
 
   fractiond:
     name: Fractiond e2e
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ~8 min build+deploy + a short suite (a few annotated workload pods + one
     # fail-open CR re-roll). The suite's own `go test` timeout is 20m; keep the
     # job above it so a genuine hang dumps goroutine stacks rather than being
     # killed at the job limit.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -244,6 +248,8 @@ jobs:
               - 'fractioning-manager/fractiond/**'
               - 'api/**'
               - 'test/e2e/**'
+              - 'hack/install-mokka-gpu-operator.sh'
+              - 'hack/e2e-*.yaml'
               - 'skaffold.yaml'
               - '.github/workflows/e2e.yaml'
               - '.github/actions/e2e-setup/**'
@@ -269,7 +275,7 @@ jobs:
           gpu-worker-nodes: ${{ env.E2E_GPU_WORKER_NODES }}
           non-gpu-worker-nodes: ${{ env.E2E_NON_GPU_WORKER_NODES }}
           cluster-name: ${{ env.E2E_CLUSTER_NAME }}
-          fake-gpu-operator-version: ${{ env.E2E_FAKE_GPU_OPERATOR_VERSION }}
+          gpu-operator-version: ${{ env.E2E_GPU_OPERATOR_VERSION }}
 
       # Same deploy as the other jobs (skaffold builds all four images + helm
       # installs the chart). The fractiond suite waits FX-STEADY, then exercises

@@ -8,6 +8,8 @@ package fractiond
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,8 +155,8 @@ func caseInvalidComputeModeBlocks(ctx context.Context, t *testing.T) {
 // the scheduler picked. The value is a scheduler/runtime contract passed through
 // verbatim, so we assert both a single-GPU assignment and a multi-GPU
 // comma-separated list survive intact (the multi-GPU assignment case). The
-// device handles are opaque to fractiond; nothing on the fake cluster interprets
-// them (the workload uses the default runtime), so any token round-trips.
+// device handles must come from Mokka: the real container toolkit resolves them
+// and runs the memory-limit hook before it starts the workload.
 func caseInjectsVisibleDevices(ctx context.Context, t *testing.T) {
 	assertVisible := func(t *testing.T, name, assignment string) {
 		// The gpus.devices assignment is only promoted when the container is a
@@ -163,15 +165,31 @@ func caseInjectsVisibleDevices(ctx context.Context, t *testing.T) {
 		annotations[h.DevicesAnnotationKey(harness.WorkloadContainer)] = assignment
 		pod := h.ApplyRunningWorkload(ctx, t, name, annotations)
 		env := h.GetPodEnv(ctx, t, pod, harness.WorkloadContainer)
-		if env[harness.EnvVisibleDevices] != assignment {
+		if env[harness.EnvVisibleDevices] != assignment && env[harness.EnvVisibleDevices] != "void" {
 			t.Errorf("%s = %q, want %q", harness.EnvVisibleDevices, env[harness.EnvVisibleDevices], assignment)
 		}
+		// CDI may consume NVIDIA_VISIBLE_DEVICES and replace it with void.
+		// Verify the selected devices inside the container in either runtime mode.
+		out, err := h.Exec(ctx, pod, harness.WorkloadContainer, "nvidia-smi", "--query-gpu=uuid", "--format=csv,noheader")
+		if err != nil {
+			t.Fatalf("read assigned GPUs: %v", err)
+		}
+		got, want := strings.Fields(out), strings.Split(assignment, ",")
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("visible GPU UUIDs = %v, want %v", got, want)
+		}
 	}
+	ids := h.RuntimeGPUUUIDs(ctx, t)
 	t.Run("single-gpu", func(t *testing.T) {
-		assertVisible(t, "inject-visible-single", "GPU-e2e-00000000")
+		assertVisible(t, "inject-visible-single", ids[0])
 	})
 	t.Run("multi-gpu", func(t *testing.T) {
-		assertVisible(t, "inject-visible-multi", "GPU-e2e-00000000,GPU-e2e-11111111")
+		if len(ids) < 2 {
+			t.Skip("requires two simulated GPUs")
+		}
+		assertVisible(t, "inject-visible-multi", strings.Join(ids[:2], ","))
 	})
 }
 
@@ -298,7 +316,7 @@ func caseFailOpenSkips(ctx context.Context, t *testing.T) {
 	})
 }
 
-// applyRunningMultiContainer creates a pod with several busybox containers on a
+// applyRunningMultiContainer creates a pod with several idle containers on a
 // GPU node, carrying the given annotations verbatim, waits for it to reach
 // Running, and registers cleanup. The shared workload.Apply builds only
 // single-container pods, so the multi-container case builds its own.
@@ -315,6 +333,8 @@ func applyRunningMultiContainer(ctx context.Context, t *testing.T, name string, 
 	pod.Namespace = harness.WorkloadNamespace
 	pod.Annotations = annotations
 	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	runtimeClassName := "nvidia"
+	pod.Spec.RuntimeClassName = &runtimeClassName
 	pod.Spec.NodeSelector = h.GPUSelectorMap(t)
 	for _, cn := range containerNames {
 		pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{
@@ -352,6 +372,8 @@ func createBlockedWorkload(ctx context.Context, t *testing.T, name string, annot
 	pod.Namespace = harness.WorkloadNamespace
 	pod.Annotations = annotations
 	pod.Spec.RestartPolicy = corev1.RestartPolicyNever
+	runtimeClassName := "nvidia"
+	pod.Spec.RuntimeClassName = &runtimeClassName
 	pod.Spec.NodeSelector = h.GPUSelectorMap(t)
 	pod.Spec.Containers = []corev1.Container{{
 		Name:    harness.WorkloadContainer,

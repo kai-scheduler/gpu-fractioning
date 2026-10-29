@@ -22,9 +22,9 @@ import (
 	"github.com/kai-scheduler/gpu-fractioning/test/e2e/waiter"
 )
 
-// DefaultImage is a minimal image with no GPU/CUDA dependency — attribution
-// tests only need a live process holding a GPU allocation, not real compute.
-const DefaultImage = "busybox:1.37"
+// DefaultImage provides glibc for the real NVIDIA utilities injected by the
+// toolkit. The test workload stays idle and does not execute CUDA.
+const DefaultImage = "ubuntu:24.04"
 
 // FractionalPod describes a single-container pod carrying the
 // nvidia.com/container.<name>.gpu-memory.{limit,request} annotation that
@@ -109,6 +109,7 @@ func Apply(ctx context.Context, c *cluster.Client, spec FractionalPod) (*corev1.
 		marker = DefaultMarker(spec.Namespace, spec.Name)
 	}
 
+	runtimeClassName := "nvidia"
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        spec.Name,
@@ -116,8 +117,9 @@ func Apply(ctx context.Context, c *cluster.Client, spec FractionalPod) (*corev1.
 			Annotations: spec.Annotations,
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			NodeSelector:  nodeSelector,
+			RestartPolicy:    corev1.RestartPolicyNever,
+			RuntimeClassName: &runtimeClassName,
+			NodeSelector:     nodeSelector,
 			Containers: []corev1.Container{
 				{
 					Name:  spec.ContainerName,
