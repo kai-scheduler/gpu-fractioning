@@ -72,6 +72,27 @@ Use v26.7.1 rather than v26.7.0: on v26.7.1 the bundled device-plugin and contai
 
 ### GPU Operator operand versions
 
+When `ClusterPolicy.spec.toolkit.enabled` is explicitly `false`, mpsd checks
+only the actual host Container Toolkit version at startup, using the host's
+`nvidia-ctk --version` through `chroot /proc/1/root`. The unused ClusterPolicy
+toolkit version is ignored. mpsd publishes
+`gpu-fractioning.kai.scheduler/container-toolkit-version` on the node and refuses
+to start MPS if the version is below v1.20.1 or cannot be detected. The node Ready
+condition reports `GPUContainerToolkitVersionUnsupported`,
+`GPUContainerToolkitVersionMissing`, or `GPUContainerToolkitVersionInvalid`.
+
+When `toolkit.enabled` is `true` or omitted (the GPU Operator API defaults it to
+`true`), the existing ClusterPolicy toolkit version validation is retained and
+no host toolkit probe is run. Toolkit-specific node diagnostics do not require
+or consult a local version label on that path. An absent or unreadable policy
+does not opt into the probe; existing dependency checks handle it as before.
+
+The probe searches `/usr/local/nvidia/toolkit` and standard host binary
+directories. Restart mpsd after an out-of-band toolkit upgrade to refresh
+its detection. This version check does not replace an end-to-end GPU memory
+enforcement test. The existing `skipGpuStackVersionChecks` escape hatch bypasses
+both toolkit checks; driver validation remains separate.
+
 What GPU fractioning depends on is two GPU Operator operands, not the GPU Operator version that bundles them:
 
 | Operand | Minimum | Why |

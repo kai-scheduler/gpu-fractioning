@@ -27,6 +27,7 @@ import (
 	gpufractioningv1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 func TestPodFailureReason(t *testing.T) {
@@ -639,16 +640,18 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			createNode("g4-node-a", map[string]string{
 				"gpu-fractioning-test/target":     "true",
 				driverinfo.NVIDIADriverMajorLabel: "615",
+				toolkitinfo.VersionLabel:          "1.20.1",
 			}, true)
 			createNode("g4-node-b", map[string]string{
-				"gpu-fractioning-test/target":     "true",
-				driverinfo.NVIDIADriverMajorLabel: "615",
+				"gpu-fractioning-test/target": "true",
+				toolkitinfo.VersionLabel:      "1.20.1",
 			}, true)
 			// Outside the selector: cleanup is selector-scoped, so this node
 			// must not be touched even though it carries the condition.
 			createNode("g4-node-c", map[string]string{
 				"gpu-fractioning-test/other":      "true",
 				driverinfo.NVIDIADriverMajorLabel: "615",
+				toolkitinfo.VersionLabel:          "1.20.1",
 			}, true)
 
 			createConfig(resourceName, selectorLabels)
@@ -678,10 +681,13 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			node := &corev1.Node{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-a"}, node)).To(Succeed())
 			Expect(node.Labels).NotTo(HaveKey(driverinfo.NVIDIADriverMajorLabel))
+			Expect(node.Labels).NotTo(HaveKey(toolkitinfo.VersionLabel))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-b"}, node)).To(Succeed())
 			Expect(node.Labels).NotTo(HaveKey(driverinfo.NVIDIADriverMajorLabel))
+			Expect(node.Labels).NotTo(HaveKey(toolkitinfo.VersionLabel))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-c"}, node)).To(Succeed())
 			Expect(node.Labels).To(HaveKeyWithValue(driverinfo.NVIDIADriverMajorLabel, "615"))
+			Expect(node.Labels).To(HaveKeyWithValue(toolkitinfo.VersionLabel, "1.20.1"))
 
 			By("preserving unrelated node conditions")
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-a"}, node)).To(Succeed())

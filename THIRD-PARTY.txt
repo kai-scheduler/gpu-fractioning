@@ -433,7 +433,7 @@ golang.org/x/exp
 golang.org/x/mod
     Version:      v0.41.0
     Source:       https://cs.opensource.google/go/x/mod
-    Linked into:  fractiond, operator
+    Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/net

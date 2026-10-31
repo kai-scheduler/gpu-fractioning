@@ -36,6 +36,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # mpsd needs two things from it: glibc, because it is built CGO_ENABLED=1 and
 # the NVML bindings dlopen libnvidia-ml.so at runtime, and /usr/bin/test, which
 # the readiness and liveness probes exec against the MPS control socket.
+# The host toolkit probe also uses coreutils' chroot with /proc/1/root.
 #
 # It does NOT need the base for nvidia-cuda-mps-control. No nvidia/cuda image
 # ships that binary; the NVIDIA container runtime injects it from the host
@@ -79,6 +80,9 @@ RUN set -e; \
     done && \
     if [ -n "$PRUNE" ]; then rpm -e $PRUNE; fi && \
     rm -rf /var/cache/dnf /var/cache/yum
+
+# Fail the image build if the host-toolkit probe cannot invoke chroot.
+RUN command -v chroot
 
 COPY --from=builder /mpsd /usr/local/bin/mpsd
 # Attribution for the third-party code statically linked into the binary.
