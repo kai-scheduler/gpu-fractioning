@@ -443,6 +443,62 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage:   "operand failed",
 		},
 		{
+			// Issue #170: with toolkit.enabled=false the GPU Operator installs no
+			// toolkit, so the version pinned next to it describes nothing on the
+			// nodes. A supported value there must not pass the gate.
+			name:  "toolkit managed outside the GPU Operator is reported as unverified despite a supported pinned version",
+			input: trueReady,
+			objects: []client.Object{
+				withOperandEnabled(clusterPolicyOperandObject("v26.7.2", "v1.20.1", "v0.20.1"), "toolkit", false),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnverified,
+			expectedMessage: "container toolkit is managed outside the GPU Operator (ClusterPolicy spec.toolkit.enabled is false)",
+		},
+		{
+			name:  "toolkit managed outside the GPU Operator with no pinned version is reported as unverified, not resolved through the operator floor",
+			input: trueReady,
+			objects: []client.Object{
+				withOperandEnabled(clusterPolicyOperandObject("v26.7.2", "", "v0.20.1"), "toolkit", false),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnverified,
+			expectedMessage: "confirm every GPU node runs v1.20.1 or newer",
+		},
+		{
+			name:  "device plugin managed outside the GPU Operator is reported as unverified",
+			input: trueReady,
+			objects: []client.Object{
+				withOperandEnabled(clusterPolicyOperandObject("v26.7.2", "v1.20.1", "v0.20.1"), "devicePlugin", false),
+			},
+			expectedStatus:  metav1.ConditionFalse,
+			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnverified,
+			expectedMessage: "device plugin is managed outside the GPU Operator (ClusterPolicy spec.devicePlugin.enabled is false)",
+		},
+		{
+			name:  "toolkit explicitly enabled with a supported pinned version leaves Ready unchanged",
+			input: trueReady,
+			objects: []client.Object{
+				withOperandEnabled(clusterPolicyOperandObject("v26.7.2", "v1.20.1", "v0.20.1"), "toolkit", true),
+			},
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
+		},
+		{
+			// The bypass is how an admin records that the host toolkit was checked
+			// by hand, so it has to clear this report like every other version gate.
+			name:  "bypass leaves Ready unchanged for a toolkit managed outside the GPU Operator",
+			input: trueReady,
+			objects: []client.Object{
+				withOperandEnabled(clusterPolicyOperandObject("v26.7.2", "v1.20.1", "v0.20.1"), "toolkit", false),
+			},
+			skipVersionChecks: true,
+			expectedStatus:    metav1.ConditionTrue,
+			expectedReason:    daemonmgr.ReasonAllComponentsReady,
+			expectedMessage:   daemonmgr.MessageAllComponentsReady,
+		},
+		{
 			name:  "bypass leaves false Ready unchanged on an unsupported OpenShift ClusterServiceVersion",
 			input: falseReady,
 			objects: []client.Object{
@@ -940,6 +996,24 @@ func clusterPolicyOperandObject(operatorVersion, toolkitVersion, devicePluginVer
 	}
 	obj.Object["spec"] = spec
 
+	return obj
+}
+
+// withOperandEnabled sets spec.<operand>.enabled, the switch that decides whether
+// the GPU Operator installs the operand, next to whatever version the object
+// already pins.
+func withOperandEnabled(obj *unstructured.Unstructured, operand string, enabled bool) *unstructured.Unstructured {
+	spec, _ := obj.Object["spec"].(map[string]any)
+	if spec == nil {
+		spec = map[string]any{}
+		obj.Object["spec"] = spec
+	}
+	section, _ := spec[operand].(map[string]any)
+	if section == nil {
+		section = map[string]any{}
+		spec[operand] = section
+	}
+	section["enabled"] = enabled
 	return obj
 }
 

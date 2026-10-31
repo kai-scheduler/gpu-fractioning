@@ -46,10 +46,14 @@ const (
 
 // gpuOperandRequirement is a GPU Operator operand whose version
 // gpu-fractioning depends on, and where to read it from the ClusterPolicy.
+// enabledPath is the switch that decides whether the GPU Operator installs the
+// operand at all; when it is false the version next to it describes nothing
+// that runs on the nodes.
 type gpuOperandRequirement struct {
-	name       string
-	specPath   []string
-	minVersion string
+	name        string
+	specPath    []string
+	enabledPath []string
+	minVersion  string
 }
 
 var gpuOperandRequirements = []gpuOperandRequirement{
@@ -58,14 +62,16 @@ var gpuOperandRequirements = []gpuOperandRequirement{
 		// that applies the NVIDIA_GPU_MEMORY_REQUEST/NVIDIA_GPU_MEMORY_LIMIT
 		// values fractiond injects. On an older toolkit the limits are injected
 		// and nothing acts on them, so GPU memory goes unfenced silently.
-		name:       "container toolkit",
-		specPath:   []string{"spec", "toolkit", "version"},
-		minVersion: "v1.20.1",
+		name:        "container toolkit",
+		specPath:    []string{"spec", "toolkit", "version"},
+		enabledPath: []string{"spec", "toolkit", "enabled"},
+		minVersion:  "v1.20.1",
 	},
 	{
-		name:       "device plugin",
-		specPath:   []string{"spec", "devicePlugin", "version"},
-		minVersion: "v0.20.1",
+		name:        "device plugin",
+		specPath:    []string{"spec", "devicePlugin", "version"},
+		enabledPath: []string{"spec", "devicePlugin", "enabled"},
+		minVersion:  "v0.20.1",
 	},
 }
 
@@ -178,7 +184,10 @@ func (c GpuOperatorDependencyChecker) managementCDINamespaceFailureMessage(clust
 // empty strings when they do, when no version source is present, or when the
 // gates are bypassed.
 //
-// Where a ClusterPolicy exists the pinned operand versions are gated directly:
+// Where a ClusterPolicy exists, an operand it declares disabled is reported
+// first: the GPU Operator installs nothing for it, so neither its pinned version
+// nor the operator's default says what runs on the nodes. The remaining pinned
+// operand versions are gated directly:
 // they are the dependency gpu-fractioning actually has. The GPU Operator version
 // is deliberately not checked against them — it is wrong in both directions,
 // rejecting an older operator whose operands were overridden onto supported
@@ -201,6 +210,10 @@ func (c GpuOperatorDependencyChecker) versionFailure(ctx context.Context, cluste
 	}
 
 	if clusterPolicy != nil {
+		if msg := gpuOperandUnmanagedFailureMessage(clusterPolicy); msg != "" {
+			return daemonmgr.ReasonGPUOperandVersionUnverified, msg, nil
+		}
+
 		msg, defaulted := gpuOperandVersionFailureMessage(clusterPolicy)
 		if msg != "" {
 			return daemonmgr.ReasonGPUOperandVersionUnsupported, msg, nil
@@ -407,6 +420,28 @@ func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
 			rawVersion, source, minimumGPUOperatorVersion)
 	}
 
+	return ""
+}
+
+// gpuOperandUnmanagedFailureMessage reports an operand the ClusterPolicy
+// declares disabled. The GPU Operator then installs nothing for it: whatever runs
+// on the nodes was put there by someone else, and a version pinned next to the
+// switch is a setting the GPU Operator never acts on, so comparing it proves
+// nothing. The operator cannot see the hosts, and passing on an unrelated
+// version is exactly the silent unfenced-memory failure the gate exists to
+// prevent, so the operand is reported as unverified instead; the bypass is the
+// acknowledgement that the version was checked on the nodes by hand.
+func gpuOperandUnmanagedFailureMessage(clusterPolicy *unstructured.Unstructured) string {
+	for _, operand := range gpuOperandRequirements {
+		enabled, found, err := unstructured.NestedBool(clusterPolicy.Object, operand.enabledPath...)
+		if err != nil || !found || enabled {
+			continue
+		}
+		return fmt.Sprintf("NVIDIA %s is managed outside the GPU Operator (ClusterPolicy %s is false), so its version "+
+			"cannot be verified from the ClusterPolicy; confirm every GPU node runs %s or newer and set "+
+			"skipGpuStackVersionChecks=true to acknowledge it",
+			operand.name, strings.Join(operand.enabledPath, "."), operand.minVersion)
+	}
 	return ""
 }
 

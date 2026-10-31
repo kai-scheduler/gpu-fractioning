@@ -34,6 +34,7 @@ const (
 	ReasonGPUOperatorNotReady              = "GPUOperatorNotReady"
 	ReasonGPUOperatorVersionUnsupported    = "GPUOperatorVersionUnsupported"
 	ReasonGPUOperandVersionUnsupported     = "GPUOperandVersionUnsupported"
+	ReasonGPUOperandVersionUnverified      = "GPUOperandVersionUnverified"
 	ReasonGPUDriverVersionMissing          = "GPUDriverVersionMissing"
 	ReasonGPUDriverVersionInvalid          = "GPUDriverVersionInvalid"
 	ReasonGPUDriverVersionUnsupported      = "GPUDriverVersionUnsupported"

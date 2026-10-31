@@ -98,6 +98,8 @@ The operator reads both from the `ClusterPolicy` (`spec.toolkit.version` and `sp
 | unset | the GPU Operator's own build default | the GPU Operator floor, **v26.7.1** |
 | an opaque tag such as a digest | that image | nothing — not checked |
 
+If `spec.<operand>.enabled` is `false`, the GPU Operator installs nothing for that operand, and a `version` pinned next to the switch describes nothing that runs on the nodes. The operator cannot see the hosts, so it reports the operand as `GPUOperandVersionUnverified` and does not roll out the node-level daemons. Check the version on every GPU node yourself — `nvidia-ctk --version` for the container toolkit — and set `skipGpuStackVersionChecks=true` to record that you did.
+
 An unset operand is not unchecked: leaving it out means the GPU Operator supplies its build's default, so its own version is what determines the operand, and the floor is the first release whose defaults satisfy both. That inference is only valid because nothing pinned the operand — which is exactly why it is *not* applied to one that is pinned. A digest is neither: it names an image the GPU Operator version says nothing about, and an unreadable version is not evidence of an unsupported one, so it does not block.
 
 The same floor applies where there is no `ClusterPolicy` at all and the version comes from the OLM `ClusterServiceVersion` instead — an OpenShift install, typically — for the same reason: no operand versions are readable there, so defaults are all that can be inferred. An install that overrode its operands onto supported versions on top of an older operator is rejected on that path, since the overrides are invisible. Use `skipGpuStackVersionChecks` if that is your situation.
