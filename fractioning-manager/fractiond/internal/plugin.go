@@ -202,7 +202,7 @@ func (p *Plugin) Synchronize(ctx context.Context, pods []*api.PodSandbox, contai
 		p.Log.Info("rebuilt container mapping from runtime sync",
 			"recordedContainers", len(infos), "totalContainers", len(containers))
 		return infos
-	})
+	}, len(containers) == 0)
 	p.setReady(true)
 	if p.sentinel != nil {
 		p.sentinel.Audit(ctx, pods, containers)
