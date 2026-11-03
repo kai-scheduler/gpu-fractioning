@@ -98,7 +98,9 @@ const (
 //     and injects the NVIDIA_GPU_MEMORY_* env vars, CUDA_MPS_PIPE_DIRECTORY, and
 //     the MPS pipe bind mount. When the scheduler also recorded a GPU
 //     device-assignment annotation on the pod it injects NVIDIA_VISIBLE_DEVICES
-//     so the fractional container sees the GPU the scheduler picked.
+//     so the fractional container sees the GPU the scheduler picked. With
+//     Vendor set to VendorAMD it instead sets the container's dmem.max and
+//     dmem.min for each assigned GPU (see package amd).
 //  2. Mapping: it records a container→pod mapping (plus assigned GPU devices and
 //     requested fraction) to a shared directory via an async events processor and
 //     fsstore writer. The metricsd sidecar reads that mapping to attribute GPU
