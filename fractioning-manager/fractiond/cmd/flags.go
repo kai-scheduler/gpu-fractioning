@@ -65,6 +65,9 @@ type cliFlags struct {
 	criSocket string
 	// stopTimeout is the grace period handed to the runtime per container stop.
 	stopTimeout time.Duration
+	// gpuVendor selects the memory enforcement: nvidia (env vars, MPS) or amd
+	// (dmem cgroup limits). With amd, retroactive enforcement is turned off.
+	gpuVendor string
 }
 
 func parseFlags() cliFlags {
@@ -87,6 +90,10 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.retroactiveEnforcement, "retroactive-enforcement", env.Bool("RETROACTIVE_ENFORCEMENT", true), "on NRI (re)connect, stop GPU-fractioning containers missing injection so kubelet recreates them correctly")
 	flag.StringVar(&f.criSocket, "cri-socket", env.String("CRI_SOCKET", defaultCRISocketPath), "CRI runtime socket used to stop containers during retroactive enforcement")
 	flag.DurationVar(&f.stopTimeout, "stop-timeout", 30*time.Second, "grace period handed to the runtime for each container stop during enforcement")
+	flag.StringVar(&f.gpuVendor, "gpu-vendor", env.String("GPU_VENDOR", internal.VendorNVIDIA), "GPU vendor whose memory limits are enforced: nvidia, or amd (dmem cgroup; retroactive enforcement is turned off)")
 	flag.Parse()
+	if f.gpuVendor == internal.VendorAMD {
+		f.retroactiveEnforcement = false
+	}
 	return f
 }
