@@ -119,6 +119,7 @@ supportSmSharing: true
 # versions are supported and the operator is misreading them.
 #
 # The NVIDIA driver version check is separate and is not bypassed by this value.
+# The node-local Container Toolkit probe is bypassed along with the operand gates.
 skipGpuStackVersionChecks: false
 
 # mpsd configures the MPS daemon (mpsd) managed by the operator.

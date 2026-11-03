@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 func TestGpuOperatorDependencyChecker(t *testing.T) {
@@ -740,14 +741,14 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 					Labels: tt.labels,
 				}})
 			}
-			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build())
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build(), false)
 
 			got, err := checker.Check(context.Background(), "node-a", corev1.NodeCondition{
 				Type:    corev1.NodeConditionType(daemonmgr.NodeConditionType),
 				Status:  tt.status,
 				Reason:  tt.initialReason,
 				Message: "message",
-			})
+			}, false)
 			if err != nil {
 				t.Fatalf("Check returned error: %v", err)
 			}
@@ -814,6 +815,73 @@ func TestGpuDriverFailureReason(t *testing.T) {
 				t.Fatalf("reason = %q, expected %q", gotReason, tt.expectedReason)
 			}
 		})
+	}
+}
+
+func TestNodeToolkitDependency(t *testing.T) {
+	for _, tt := range []struct{ version, reason string }{
+		{"1.19.1", daemonmgr.ReasonGPUContainerToolkitVersionUnsupported},
+		{"1.20.1-rc.1", daemonmgr.ReasonGPUContainerToolkitVersionUnsupported},
+		{"", daemonmgr.ReasonGPUContainerToolkitVersionMissing},
+		{"invalid", daemonmgr.ReasonGPUContainerToolkitVersionInvalid},
+		{"1.20.1", "CrashLoopBackOff"},
+		{"1.21.0", "CrashLoopBackOff"},
+	} {
+		t.Run(tt.version, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: "615", toolkitinfo.VersionLabel: tt.version,
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), false)
+			got, err := checker.Check(context.Background(), node.Name, corev1.NodeCondition{
+				Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff",
+			}, true)
+			if err != nil || got.Reason != tt.reason || got.Status != corev1.ConditionFalse {
+				t.Fatalf("Check() = %+v, %v; want reason %s", got, err, tt.reason)
+			}
+		})
+	}
+}
+
+func TestExternallyManagedToolkitIgnoresDeclaredVersion(t *testing.T) {
+	for _, declared := range []string{"v1.19.1", "v1.20.1", ""} {
+		t.Run(declared, func(t *testing.T) {
+			policy := clusterPolicyOperandObject("v26.7.1", declared, "v0.20.1")
+			if err := unstructured.SetNestedField(policy.Object, false, "spec", "toolkit", "enabled"); err != nil {
+				t.Fatal(err)
+			}
+			if message, defaulted := gpuOperandVersionFailureMessage(policy); message != "" || len(defaulted) != 0 {
+				t.Fatalf("disabled toolkit should use host detection, got %q, %v", message, defaulted)
+			}
+		})
+	}
+}
+
+func TestToolkitBypassPreservesDriverCheck(t *testing.T) {
+	for _, tt := range []struct{ driver, reason string }{
+		{"615", "CrashLoopBackOff"},
+		{"614", daemonmgr.ReasonGPUDriverVersionUnsupported},
+	} {
+		t.Run(tt.driver, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: tt.driver, toolkitinfo.VersionLabel: "1.19.1",
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), true)
+			got, err := checker.Check(context.Background(), node.Name, corev1.NodeCondition{
+				Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff",
+			}, true)
+			if err != nil || got.Reason != tt.reason {
+				t.Fatalf("Check() = %+v, %v; want reason %s", got, err, tt.reason)
+			}
+		})
+	}
+}
+
+func TestBuildOptionsForwardsToolkitBypass(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		r := &GpuFractioningConfigReconciler{SkipGpuStackVersionChecks: skip}
+		if got := r.buildOptions(context.Background(), &v1alpha1.GpuFractioningConfig{}, ClusterPolicy{}).SkipGpuStackVersionChecks; got != skip {
+			t.Fatalf("buildOptions() bypass = %t, want %t", got, skip)
+		}
 	}
 }
 
@@ -975,5 +1043,93 @@ func clusterPolicyStatus(state, readyStatus, errorStatus, message string) map[st
 				"message": message,
 			},
 		},
+	}
+}
+
+func TestToolkitManagementSelectsValidation(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		enabled       any
+		setEnabled    bool
+		wantHostProbe bool
+	}{
+		{name: "managed", enabled: true, setEnabled: true},
+		{name: "preinstalled", enabled: false, setEnabled: true, wantHostProbe: true},
+		{name: "omitted defaults to managed"},
+		{name: "malformed is not an explicit false", enabled: "false", setEnabled: true},
+		{name: "null is not an explicit false", setEnabled: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := clusterPolicyOperandObject("v26.7.1", "v1.19.1", "v0.20.1")
+			if tt.setEnabled {
+				if err := unstructured.SetNestedField(policy.Object, tt.enabled, "spec", "toolkit", "enabled"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := toolkitExternallyManaged(policy); got != tt.wantHostProbe {
+				t.Fatalf("host probe = %t, want %t", got, tt.wantHostProbe)
+			}
+			message, _ := gpuOperandVersionFailureMessage(policy)
+			if tt.wantHostProbe && message != "" {
+				t.Fatalf("unused toolkit version was checked: %s", message)
+			}
+			if !tt.wantHostProbe && !strings.Contains(message, "container toolkit version v1.19.1") {
+				t.Fatalf("existing declared-version check was lost: %s", message)
+			}
+		})
+	}
+	if toolkitExternallyManaged(nil) {
+		t.Fatal("an absent policy must not enable the host probe")
+	}
+}
+
+func TestSkippedToolkitProbePreservesNodeDiagnostics(t *testing.T) {
+	for _, version := range []string{"", "1.19.1", "invalid"} {
+		t.Run(version, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: "615", toolkitinfo.VersionLabel: version,
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), false)
+			condition := corev1.NodeCondition{Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff", Message: "original pod failure"}
+			got, err := checker.Check(context.Background(), node.Name, condition, false)
+			if err != nil || got != condition {
+				t.Fatalf("skipped probe changed diagnostics: %+v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestPreinstalledToolkitRetainsDevicePluginValidation(t *testing.T) {
+	policy := clusterPolicyOperandObject("v26.7.1", "v1.19.1", "v0.20.0")
+	if err := unstructured.SetNestedField(policy.Object, false, "spec", "toolkit", "enabled"); err != nil {
+		t.Fatal(err)
+	}
+	if message, _ := gpuOperandVersionFailureMessage(policy); !strings.Contains(message, "device plugin version v0.20.0") {
+		t.Fatalf("device plugin validation was lost: %s", message)
+	}
+}
+
+func TestBuildOptionsSelectsHostToolkitProbe(t *testing.T) {
+	for _, enabled := range []any{true, false, nil} {
+		for _, skip := range []bool{false, true} {
+			policy := clusterPolicyOperandObject("v26.7.1", "v1.19.1", "v0.20.1")
+			if enabled != nil {
+				if err := unstructured.SetNestedField(policy.Object, enabled, "spec", "toolkit", "enabled"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &GpuFractioningConfigReconciler{SkipGpuStackVersionChecks: skip}
+			opts := r.buildOptions(context.Background(), &v1alpha1.GpuFractioningConfig{}, ClusterPolicy{Policy: policy})
+			if opts.ProbeHostToolkit != (enabled == false) || opts.SkipGpuStackVersionChecks != skip {
+				t.Fatalf("enabled=%v, bypass=%t: unexpected options %+v", enabled, skip, opts)
+			}
+		}
+	}
+	// A failed read must retain the existing dependency error handling rather
+	// than inferring an externally managed toolkit from incomplete information.
+	r := &GpuFractioningConfigReconciler{}
+	policy := ClusterPolicy{Err: errors.New("policy read failed")}
+	if r.buildOptions(context.Background(), &v1alpha1.GpuFractioningConfig{}, policy).ProbeHostToolkit {
+		t.Fatal("an unreadable policy must not opt into the host probe")
 	}
 }

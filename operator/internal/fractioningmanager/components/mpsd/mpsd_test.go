@@ -4,6 +4,7 @@
 package mpsd
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -422,5 +423,23 @@ func defaultOpts() daemonmgr.BuildOptions {
 				Tag:        "v0.1.0",
 			},
 		},
+	}
+}
+
+func TestDaemon_BuildDaemonSet_ToolkitProbeAndBypass(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		for _, probe := range []bool{false, true} {
+			opts := defaultOpts()
+			opts.SkipGpuStackVersionChecks = skip
+			opts.ProbeHostToolkit = probe
+			ds := NewMpsdDaemon(nil, false, true).BuildDaemonSet(opts)
+			env := ds.Spec.Template.Spec.Containers[0].Env
+			if got := envValue(env, "SKIP_GPU_STACK_VERSION_CHECKS"); got != strconv.FormatBool(skip) {
+				t.Fatalf("toolkit bypass env = %q, want %t", got, skip)
+			}
+			if got := envValue(env, "CHECK_HOST_TOOLKIT_VERSION"); got != strconv.FormatBool(probe) {
+				t.Fatalf("host toolkit probe env = %q, want %t", got, probe)
+			}
+		}
 	}
 }

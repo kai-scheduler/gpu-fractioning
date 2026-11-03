@@ -105,6 +105,8 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 		corev1.EnvVar{Name: envCapabilities, Value: "compute,utility"},
 		corev1.EnvVar{Name: "MPS_MEMACCT_AUDIT_LOG", Value: strconv.FormatBool(d.auditLog)},
 		corev1.EnvVar{Name: "MPS_SUPPORT_SM_SHARING", Value: strconv.FormatBool(d.supportSMSharing)},
+		corev1.EnvVar{Name: "SKIP_GPU_STACK_VERSION_CHECKS", Value: strconv.FormatBool(opts.SkipGpuStackVersionChecks)},
+		corev1.EnvVar{Name: "CHECK_HOST_TOOLKIT_VERSION", Value: strconv.FormatBool(opts.ProbeHostToolkit)},
 	)
 	container.Env = append(container.Env, daemonmgr.FIPSOnlyEnv(opts.FIPSOnly)...)
 	result.Spec.Template.Spec.Containers = append(result.Spec.Template.Spec.Containers, container)
