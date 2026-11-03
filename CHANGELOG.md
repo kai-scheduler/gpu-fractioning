@@ -119,6 +119,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   not backfilled.
 
 ### Changed
+- The `Ready` condition message on `GpuFractioningConfig` now says how many nodes
+  a failing component is down on, e.g. `not ready: MpsdReady (7 of 10 pods ready)`
+  instead of `not ready: MpsdReady`, so one bad node is distinguishable from all
+  of them. The `Ready` reason is unchanged.
 - All four images move to new base images. `operator` and `fractiond` move from
   `nvcr.io/nvidia/distroless/go:v4.1.4` to `scratch`: both are `CGO_ENABLED=0`
   and fully static, so each image is now just the binary, its attribution and a
