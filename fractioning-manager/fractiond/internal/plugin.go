@@ -13,6 +13,7 @@ import (
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/amd"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/events"
@@ -75,7 +76,20 @@ type Config struct {
 	// delivered the full container state, so registration succeeded) and back to
 	// not-ready on Shutdown (the runtime is disconnecting).
 	Readiness ReadinessSetter
+
+	// Vendor selects how a container's GPU memory is enforced: VendorNVIDIA (the
+	// default, when empty) injects the NVIDIA_GPU_MEMORY_* env vars and the MPS
+	// pipe; VendorAMD sets dmem.max and dmem.min on the container's cgroup (see
+	// package amd). With VendorAMD, sm-sharing is rejected (AMD GPUs have no MPS)
+	// and retroactive enforcement must be off.
+	Vendor string
 }
+
+// GPU vendors the plugin enforces memory for.
+const (
+	VendorNVIDIA = "nvidia"
+	VendorAMD    = "amd"
+)
 
 // Plugin implements the GPU fractioning NRI handler logic. It has two independent
 // jobs on the container lifecycle:
@@ -84,7 +98,9 @@ type Config struct {
 //     and injects the NVIDIA_GPU_MEMORY_* env vars, CUDA_MPS_PIPE_DIRECTORY, and
 //     the MPS pipe bind mount. When the scheduler also recorded a GPU
 //     device-assignment annotation on the pod it injects NVIDIA_VISIBLE_DEVICES
-//     so the fractional container sees the GPU the scheduler picked.
+//     so the fractional container sees the GPU the scheduler picked. With
+//     Vendor set to VendorAMD it instead sets the container's dmem.max and
+//     dmem.min for each assigned GPU (see package amd).
 //  2. Mapping: it records a container→pod mapping (plus assigned GPU devices and
 //     requested fraction) to a shared directory via an async events processor and
 //     fsstore writer. The metricsd sidecar reads that mapping to attribute GPU
@@ -107,6 +123,7 @@ type Plugin struct {
 	InjectCDIDevice  bool
 	Log              *slog.Logger
 
+	vendor    string
 	events    *events.Processor
 	adapter   adapter
 	readiness ReadinessSetter
@@ -139,6 +156,21 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		LogEvents: func() bool { return logPodEvents },
 	})
 
+	vendor := cfg.Vendor
+	if vendor == "" {
+		vendor = VendorNVIDIA
+	}
+	switch vendor {
+	case VendorNVIDIA:
+	case VendorAMD:
+		if cfg.RetroactiveEnforcement {
+			return nil, fmt.Errorf("retroactive enforcement is not supported for AMD GPUs")
+		}
+		cfg.SupportSMSharing = false // no MPS on AMD GPUs: sm-sharing is rejected like an invalid mode
+	default:
+		return nil, fmt.Errorf("unknown GPU vendor %q (use %q or %q)", vendor, VendorNVIDIA, VendorAMD)
+	}
+
 	var sentinel *audit.Sentinel
 	if cfg.RetroactiveEnforcement {
 		if stopper == nil {
@@ -159,6 +191,7 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		SupportSMSharing: cfg.SupportSMSharing,
 		InjectCDIDevice:  cfg.InjectCDIDevice,
 		Log:              log,
+		vendor:           vendor,
 		events:           proc,
 		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, log: log},
 		readiness:        cfg.Readiness,
@@ -284,6 +317,9 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		)
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
+	if p.vendor == VendorAMD {
+		return p.amdAdjustment(pod, ctr, gpuMemoryCfg)
+	}
 	pipeSource, pipeDestination := injection.MPSPipeMount(p.MPSPipeDirectory, computeMode)
 
 	adj := &api.ContainerAdjustment{}
@@ -343,7 +379,39 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	return adj, nil
 }
 
-// containerHasEnv reports whether the container's spec already defines the given
+// amdAdjustment enforces an AMD GPU container's memory with the dmem cgroup
+// controller: the runtime writes dmem.max (the limit) and dmem.min (the request)
+// for each assigned GPU's VRAM region on the container's cgroup, and the kernel
+// refuses allocations past the limit. The GPU itself reaches the container
+// through the device plugin or the scheduler's own device injection; no env var
+// or mount is added. Errors follow FailOpen like annotation errors.
+func (p *Plugin) amdAdjustment(pod *api.PodSandbox, ctr *api.Container, cfg annotations.GPUMemoryConfig) (*api.ContainerAdjustment, error) {
+	devices, err := amd.Devices(annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix))
+	var minValue, maxValue string
+	if err == nil {
+		minValue, maxValue, err = amd.Limits(cfg.Request, cfg.Limit, devices)
+	}
+	if err != nil {
+		p.Log.Warn("cannot limit AMD GPU memory", "container", ctr.Name, "pod", pod.Name, "error", err)
+		if !p.FailOpen {
+			return nil, fmt.Errorf("container %q in pod %q: %w", ctr.Name, pod.Name, err)
+		}
+		return nil, nil
+	}
+	adj := &api.ContainerAdjustment{}
+	adj.AddLinuxUnified(amd.UnifiedMin, minValue)
+	adj.AddLinuxUnified(amd.UnifiedMax, maxValue)
+	p.Log.Info("adjusting container with AMD GPU memory limits",
+		"container", ctr.Name,
+		"pod", pod.Name,
+		"requestMiB", cfg.Request,
+		"limitMiB", cfg.Limit,
+		"devices", devices,
+	)
+	return adj, nil
+}
+
+// containerHasEnvreports whether the container's spec already defines the given
 // environment variable (as "KEY=VALUE" or a bare "KEY"), so the caller can
 // replace it rather than append a duplicate.
 func containerHasEnv(ctr *api.Container, key string) bool {
