@@ -132,6 +132,13 @@ Name of the pre-delete config-cleanup hook Job and its RBAC.
 {{- end }}
 
 {{/*
+Name of the pre-upgrade config-adopter hook Job and its RBAC.
+*/}}
+{{- define "gpu-fractioning.configAdopterName" -}}
+{{- printf "%s-config-adopter" (include "gpu-fractioning.fullname" . | trunc 48 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
 Whether to render the OpenShift-specific resources, as "true" or "" so callers
 can use it directly in an if.
 

@@ -175,6 +175,26 @@ crdUpgrader:
       memory: 64Mi
       ephemeral-storage: 100Mi
 
+# configAdopter is the pre-upgrade hook Job that gives a GpuFractioningConfig
+# created by a release up to 0.1.8 the ownership metadata Helm requires. Those
+# releases created the CR as a post-install hook, which Helm neither stamps nor
+# records, so the first upgrade to a chart that manages the CR as a release
+# resource would otherwise refuse to import it. A fresh install has nothing to
+# adopt and the Job exits at once.
+configAdopter:
+  # Disable only if you label and annotate the CR yourself before upgrading;
+  # see the Upgrading section of the README.
+  enabled: true
+  backoffLimit: 1
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 100m
+      memory: 64Mi
+      ephemeral-storage: 100Mi
+
 # configCleanup is the pre-delete hook Job that deletes the GpuFractioningConfig
 # objects before Helm removes the rest of the release. Helm deletes custom
 # resources last, after the operator Deployment, so without this the CR would

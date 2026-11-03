@@ -173,3 +173,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   (`config-cleanup`, the operator image's `delete-configs` subcommand, toggled by
   `configCleanup.enabled`) deletes the CR and waits for the operator's cleanup
   before Helm removes the operator, because Helm deletes custom resources last.
+  The first upgrade from a release that created the CR as a hook is covered by a
+  `pre-upgrade` hook Job (`config-adopter`, the `adopt-config` subcommand,
+  `configAdopter.enabled`) that gives the existing CR the ownership label and
+  annotations Helm requires before importing it, so the CR keeps its UID and the
+  DaemonSets it owns are left in place.

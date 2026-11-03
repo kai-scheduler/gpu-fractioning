@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/config"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/configadopt"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/configcleanup"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/controller"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/crdupgrade"
@@ -45,6 +46,7 @@ func init() {
 // something already built, scanned and published in a -fips variant.
 const (
 	applyCRDsCommand     = "apply-crds"
+	adoptConfigCommand   = "adopt-config"
 	deleteConfigsCommand = "delete-configs"
 )
 
@@ -52,6 +54,10 @@ func main() {
 	// Before ParseFlags, which would reject the subcommand as a stray argument.
 	if len(os.Args) > 1 && os.Args[1] == applyCRDsCommand {
 		runApplyCRDs(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == adoptConfigCommand {
+		runAdoptConfig(os.Args[2:])
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == deleteConfigsCommand {
@@ -266,4 +272,37 @@ func runDeleteConfigs(args []string) {
 		os.Exit(1)
 	}
 	log.Info("GpuFractioningConfigs deleted")
+}
+
+// runAdoptConfig stamps an existing GpuFractioningConfig with the release's
+// ownership metadata so the upgrade that follows can manage it. The chart runs
+// it as a pre-upgrade hook Job.
+func runAdoptConfig(args []string) {
+	fs := flag.NewFlagSet(adoptConfigCommand, flag.ExitOnError)
+	development := fs.Bool("development", false, "Enable development-mode logging (debug level, human-readable).")
+	name := fs.String("name", "default", "Name of the GpuFractioningConfig to adopt.")
+	releaseName := fs.String("release-name", "", "Helm release name that will own the object.")
+	releaseNamespace := fs.String("release-namespace", "", "Helm release namespace that will own the object.")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(1)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "%s takes no positional arguments, got %q\n", adoptConfigCommand, fs.Args())
+		fs.Usage()
+		os.Exit(1)
+	}
+	if *releaseName == "" || *releaseNamespace == "" {
+		fmt.Fprintf(os.Stderr, "%s requires --release-name and --release-namespace\n", adoptConfigCommand)
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ctrl.SetLogger(zap.New(zap.UseDevMode(*development)))
+	log := ctrl.Log.WithName(adoptConfigCommand)
+
+	ctx := ctrl.LoggerInto(ctrl.SetupSignalHandler(), log)
+	if err := configadopt.Run(ctx, *name, configadopt.Release{Name: *releaseName, Namespace: *releaseNamespace}); err != nil {
+		log.Error(err, "Failed to adopt GpuFractioningConfig")
+		os.Exit(1)
+	}
 }
