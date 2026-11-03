@@ -126,9 +126,9 @@ func AggregateReadyCondition(conditions []metav1.Condition, generation int64) me
 		}
 		switch c.Status {
 		case metav1.ConditionFalse:
-			falseComponents = append(falseComponents, string(c.Type))
+			falseComponents = append(falseComponents, componentSummary(c))
 		case metav1.ConditionUnknown:
-			unknownComponents = append(unknownComponents, string(c.Type))
+			unknownComponents = append(unknownComponents, componentSummary(c))
 		}
 	}
 
@@ -165,6 +165,16 @@ func AggregateReadyCondition(conditions []metav1.Condition, generation int64) me
 		Reason:             ReasonAllComponentsReady,
 		Message:            MessageAllComponentsReady,
 	}
+}
+
+// componentSummary renders a per-daemon condition for the aggregate message:
+// the condition type, followed by its message (e.g. "1 of 40 pods ready") when
+// set, so consumers can tell how many nodes are affected.
+func componentSummary(c metav1.Condition) string {
+	if c.Message == "" {
+		return c.Type
+	}
+	return fmt.Sprintf("%s (%s)", c.Type, c.Message)
 }
 
 // SetCondition upserts a condition into the status. If a condition with the same
