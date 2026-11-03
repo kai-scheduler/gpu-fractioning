@@ -52,6 +52,7 @@ func main() {
 		LogPodEvents:           flags.logPodEvents,
 		Log:                    logger,
 		Readiness:              readyState,
+		Vendor:                 flags.gpuVendor,
 	}, stopper)
 	if err != nil {
 		logger.Error("failed to create plugin", "error", err)

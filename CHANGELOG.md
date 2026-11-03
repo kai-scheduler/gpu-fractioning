@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- fractiond enforces GPU memory on AMD GPUs with `--gpu-vendor=amd` (`GPU_VENDOR=amd`). The same per-container
+  annotations become limits of the Linux dmem cgroup controller (Linux 6.14+, `amdgpu`): the limit is written as
+  `dmem.max` and the request as `dmem.min` for each GPU named by PCI address in `gpus.devices`, on the container's
+  cgroup through NRI. `sm-sharing` is rejected and retroactive enforcement is off for AMD GPUs.
 - OpenShift is now supported by a plain `helm install`, with no platform flag.
   The chart detects it by the presence of the `security.openshift.io/v1` API
   group, then creates a `SecurityContextConstraints` and grants `use` of it to

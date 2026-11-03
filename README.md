@@ -276,6 +276,36 @@ annotations:
 - **`sm-sharing`** — compute is shared via MPS itself (concurrent SM occupancy): fractiond routes the container to mpsd's shared MPS server instead. `sm-sharing` only makes sense alongside a GPU-memory annotation (above), since it changes how compute is shared, not memory.
 - Any other value fails container creation (or falls back to `time-slicing` if fractiond is running fail-open).
 
+### AMD GPUs
+
+fractiond also enforces the same annotations on AMD GPUs, with `--gpu-vendor=amd` (or `GPU_VENDOR=amd`). There is no
+driver-side limit for AMD GPUs; instead the Linux **dmem cgroup controller** (Linux 6.14+, `amdgpu`) caps a cgroup's
+VRAM, and amdgpu registers each GPU's VRAM as the region `drm/<PCI address>/vram`. For a container with GPU-memory
+annotations, fractiond has the runtime write on the container's cgroup:
+
+| Annotation | cgroup file | Effect |
+| --- | --- | --- |
+| `<prefix><name>.gpu-memory.limit` | `dmem.max` | the kernel refuses allocations past it (`hipErrorOutOfMemory`) |
+| `<prefix><name>.gpu-memory.request` | `dmem.min` | memory protected from eviction by other cgroups |
+| `<prefix><name>.gpus.devices` | which regions | the GPUs' PCI addresses, e.g. `0000:03:00.0`; the request and limit apply to each |
+
+```yaml
+annotations:
+  nvidia.com/container.trainer.gpu-memory.request: 8Gi
+  nvidia.com/container.trainer.gpu-memory.limit: 16Gi
+  nvidia.com/container.trainer.gpus.devices: "0000:03:00.0"
+```
+
+- The limits are set through NRI (`linux.resources.unified`), so fractiond needs no access to the host's cgroup tree.
+  The kubelet enables the `dmem` controller down to each container wherever the kernel offers it.
+- The device list is required: without it, or with a value that is not a PCI address, container creation fails
+  (or the container is left uncapped if fractiond is running fail-open). A GPU whose VRAM is not a dmem region (an
+  older kernel) also fails container creation: the runtime cannot write the limit.
+- The GPU itself reaches the container as before, through AMD's device plugin or the scheduler's device injection.
+- AMD GPUs have no MPS: `sm-sharing` is rejected and compute is time-sliced. Retroactive enforcement is turned off.
+- ROCm still reports the whole GPU's memory to the process (`hipMemGetInfo`), so frameworks that size themselves
+  from it (vLLM's `--gpu-memory-utilization`, PyTorch's memory fraction) should be told the share.
+
 ## `GpuFractioningConfig` reference
 
 A single cluster-scoped CR configures the whole stack. Field docs are authoritative in [`api/v1alpha1/gpufractioningconfig_types.go`](api/v1alpha1/gpufractioningconfig_types.go).
