@@ -93,7 +93,7 @@ func Delete(ctx context.Context, c client.Client, timeout time.Duration) error {
 	case wait.Interrupted(err):
 		return fmt.Errorf("GpuFractioningConfig(s) %s still exist after %s: the operator must be running to finish "+
 			"its node cleanup and remove the finalizer. Retry once the operator is up, or clear the finalizer by hand "+
-			"(kubectl patch gpufractioningconfig <name> --type=merge -p '{"metadata":{"finalizers":null}}'), which "+
+			`(kubectl patch gpufractioningconfig <name> --type=merge -p '{"metadata":{"finalizers":null}}'), which `+
 			"skips that cleanup. helm uninstall --no-hooks skips this Job and leaves the object stuck on its finalizer",
 			strings.Join(remaining, ", "), timeout)
 	default:
