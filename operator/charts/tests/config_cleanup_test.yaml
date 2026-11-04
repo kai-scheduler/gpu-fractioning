@@ -18,7 +18,7 @@ tests:
           value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0
       - equal:
           path: spec.template.spec.containers[0].args
-          value: ["delete-configs", "--timeout=5m"]
+          value: ["delete-configs", "--timeout=3m"]
 
   - it: is a pre-delete hook, cleaned up after it succeeds
     templates:

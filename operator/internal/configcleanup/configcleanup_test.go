@@ -103,8 +103,10 @@ func TestDeleteReportsWhatIsLeftOnTimeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected a timeout error, got nil")
 	}
-	if !strings.Contains(err.Error(), "default") || !strings.Contains(err.Error(), "finalizer") {
-		t.Fatalf("error should name the remaining object and the finalizer, got: %v", err)
+	for _, want := range []string{"default", "finalizer", "--no-hooks", "kubectl patch gpufractioningconfig"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error should contain %q, got: %v", want, err)
+		}
 	}
 	if left := remaining(t, c); len(left) != 1 {
 		t.Fatalf("expected the object to remain, got %v", left)

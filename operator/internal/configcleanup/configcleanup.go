@@ -28,8 +28,9 @@ import (
 
 // DefaultTimeout bounds the wait for the operator's cleanup. Removing node
 // conditions and labels is a few API calls per node, so this only covers an
-// operator that is not running at all.
-const DefaultTimeout = 5 * time.Minute
+// operator that is not running at all. It stays below Helm's default hook
+// timeout (5m) so the error below is what reaches the user, not Helm's.
+const DefaultTimeout = 3 * time.Minute
 
 const pollInterval = 2 * time.Second
 
@@ -90,7 +91,10 @@ func Delete(ctx context.Context, c client.Client, timeout time.Duration) error {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case wait.Interrupted(err):
-		return fmt.Errorf("GpuFractioningConfig(s) %s still exist after %s; the operator must be running to finish node cleanup and remove its finalizer",
+		return fmt.Errorf("GpuFractioningConfig(s) %s still exist after %s: the operator must be running to finish "+
+			"its node cleanup and remove the finalizer. Retry once the operator is up, or clear the finalizer by hand "+
+			"(kubectl patch gpufractioningconfig <name> --type=merge -p '{"metadata":{"finalizers":null}}'), which "+
+			"skips that cleanup. helm uninstall --no-hooks skips this Job and leaves the object stuck on its finalizer",
 			strings.Join(remaining, ", "), timeout)
 	default:
 		return fmt.Errorf("wait for GpuFractioningConfig deletion: %w", err)

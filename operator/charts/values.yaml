@@ -204,9 +204,13 @@ configCleanup:
   # Disable only if you delete the GpuFractioningConfig objects yourself before
   # `helm uninstall`, while the operator is still running.
   enabled: true
-  backoffLimit: 1
-  # How long the Job waits for the operator to finish its node cleanup.
-  timeout: 5m
+  # No retry: a second attempt cannot help when the operator is not running to
+  # clear the finalizer, and it would only outlast Helm's own wait.
+  backoffLimit: 0
+  # How long the Job waits for the operator to finish its node cleanup. Keep it
+  # below Helm's hook timeout (5m by default, `helm uninstall --timeout`), so the
+  # Job's own error reaches the log instead of a generic Helm timeout.
+  timeout: 3m
   resources:
     limits:
       cpu: 500m
