@@ -1,0 +1,74 @@
+{{/*
+Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}}
+{{- if .Values.configAdopter.enabled }}
+{{/*
+Gives a GpuFractioningConfig created by a release up to 0.1.8 the ownership
+metadata Helm checks before importing an existing object into a release.
+Those releases created the CR as a post-install hook, which Helm neither
+stamps nor records, so without this the first upgrade fails with "exists and
+cannot be imported into the current release". Runs after the crd-upgrader
+(weight 2) so the CRD is current; a fresh install has nothing to adopt.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "gpu-fractioning.configAdopterName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "3"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: {{ .Values.configAdopter.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "gpu-fractioning.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: config-adopter
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "gpu-fractioning.configAdopterName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: config-adopter
+          image: "{{ .Values.images.operator.repository }}:{{ include "gpu-fractioning.imageTag" (dict "root" $ "tag" .Values.images.operator.tag) }}"
+          imagePullPolicy: {{ .Values.images.operator.pullPolicy }}
+          args:
+            - adopt-config
+            - --release-name={{ .Release.Name }}
+            - --release-namespace={{ .Release.Namespace }}
+          {{- with include "gpu-fractioning.fipsOnlyEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.configAdopter.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

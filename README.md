@@ -208,6 +208,17 @@ helm upgrade gpu-fractioning \
 
 The `GpuFractioningConfig` CRD ships in the chart's `crds/` directory, so Helm installs it on a fresh install, skips it if it is already present, and leaves it in place on `helm uninstall` — existing `GpuFractioningConfig` data survives an uninstall, and a reinstall does not fail on the existing CRD.
 
+Releases up to 0.1.8 created the `default` `GpuFractioningConfig` as a `post-install` hook, which Helm neither stamps with its ownership metadata nor records in the release. The first `helm upgrade` to a chart that manages the CR as a release resource would refuse to import it (`exists and cannot be imported into the current release`), so a `pre-upgrade` hook Job (`config-adopter`, the operator image's `adopt-config` subcommand) first labels it `app.kubernetes.io/managed-by=Helm` and annotates it with `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace`. The CR keeps its UID and the DaemonSets it owns stay as they are. With `configAdopter.enabled=false`, do the same by hand once before upgrading:
+
+```sh
+kubectl label gpufractioningconfig default app.kubernetes.io/managed-by=Helm --overwrite
+kubectl annotate gpufractioningconfig default \
+  meta.helm.sh/release-name=gpu-fractioning meta.helm.sh/release-namespace=gpu-fractioning \
+  helm.sh/hook- helm.sh/hook-weight- --overwrite
+```
+
+`helm uninstall` runs a `pre-delete` hook Job (`config-cleanup`, the operator image's `delete-configs` subcommand) that deletes the `GpuFractioningConfig` objects and waits for the operator to finish its node cleanup, so the node daemons go away with the release. Helm itself deletes custom resources after the operator Deployment, which would leave the CR waiting on a finalizer nobody removes. Set `configCleanup.enabled=false` to skip the Job if you delete the objects yourself first, while the operator is still running. The Job waits `configCleanup.timeout` (3m) for the operator, below Helm's own 5m hook timeout so its error is the one you see; `helm uninstall --no-hooks` skips the Job and leaves the CR stuck on its finalizer, which you can clear by hand with `kubectl patch gpufractioningconfig default --type=merge -p '{"metadata":{"finalizers":null}}'` at the cost of the node cleanup.
+
 Helm never *updates* a chart's `crds/`, though, so the chart runs a `pre-install`/`pre-upgrade` hook Job (`crd-upgrader`) that server-side applies the CRD before the rest of the release. A release that adds a field to `GpuFractioningConfig` therefore reaches an existing install without any manual step, and one that drops a field propagates too — the apply replaces the schema wholesale, so a removed `required` entry or CEL validation rule stops being enforced rather than lingering.
 
 The Job runs the operator image's `apply-crds` subcommand — no extra image to mirror — and waits for the CRD to be Established, which is what guards a first install, where the kind is not yet served. It is deleted once it succeeds; on failure it is left behind for inspection:
