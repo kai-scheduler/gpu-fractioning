@@ -44,13 +44,13 @@ var configTmpl = template.Must(template.New("nvml-mock-config").Parse(configYAML
 
 const (
 	// MockNamespace / MockConfigMapName identify the nvml-mock DaemonSet objects
-	// in the gpu-operator namespace — used only for HostPID resolution.
-	MockNamespace     = "gpu-operator"
+	// in the mokka namespace — used only for HostPID resolution.
+	MockNamespace     = "mokka"
 	MockConfigMapName = "nvml-mock-config"
 
 	// Container is the nvml-mock pod's container name; it runs hostPID: true and
 	// privileged, so an exec into it sees the whole node's process table.
-	Container = "nvml-mock"
+	Container = "node-agent"
 
 	// MetricsdNamespace / MetricsdConfigMapName identify the ConfigMap that the
 	// metricsd sidecar mounts as MOCK_NVML_CONFIG. SetProcesses updates this
@@ -219,7 +219,7 @@ func restartMetricsd(ctx context.Context, c *cluster.Client) error {
 }
 
 func podOnNode(ctx context.Context, c *cluster.Client, nodeName string) (string, error) {
-	mockPods, err := pods.ListByLabel(ctx, c, MockNamespace, "app=nvml-mock")
+	mockPods, err := pods.ListByLabel(ctx, c, MockNamespace, "app.kubernetes.io/instance=nvml-mock")
 	if err != nil {
 		return "", fmt.Errorf("list nvml-mock pods: %w", err)
 	}

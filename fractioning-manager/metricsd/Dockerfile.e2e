@@ -61,12 +61,15 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # Point the dynamic loader at the baked-in mock library.
 ENV LD_LIBRARY_PATH=/usr/lib/nvml-mock
 # Default MOCK_NVML_CONFIG path. The file itself is supplied at runtime by a
-# ConfigMap mounted at /etc/nvml-mock via metricsAgent.volumes /
+# ConfigMap mounted at /etc/gpu-fractioning-test via metricsAgent.volumes /
 # metricsAgent.volumeMounts on the GpuFractioningConfig CR (see
 # operator/charts/e2e-values.yaml).
-ENV MOCK_NVML_CONFIG=/etc/nvml-mock/config.yaml
+ENV MOCK_NVML_CONFIG=/etc/gpu-fractioning-test/config.yaml
 
 COPY --from=build /out/metricsd /usr/local/bin/metricsd
+COPY --from=build /usr/bin/env /usr/local/bin/e2e-env
 COPY --from=nvml-mock /libnvidia-ml.so.1 /usr/lib/nvml-mock/libnvidia-ml.so.1
 
-ENTRYPOINT ["/usr/local/bin/metricsd"]
+# CDI may replace image ENV with Mokka's node config. Select the fixture after
+# runtime injection, and keep node overrides out of the controlled metrics data.
+ENTRYPOINT ["/usr/local/bin/e2e-env", "-u", "MOCK_NVML_OVERRIDES", "MOCK_NVML_CONFIG=/etc/gpu-fractioning-test/config.yaml", "/usr/local/bin/metricsd"]

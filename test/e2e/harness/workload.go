@@ -63,7 +63,7 @@ func (h *Harness) DefaultWorkloadAnnotations() map[string]string {
 	return workload.FractionalAnnotations(WorkloadContainer, MemRequestMiB, MemLimitMiB)
 }
 
-// ApplyRunningWorkload creates a busybox pod on a GPU node with the given
+// ApplyRunningWorkload creates an idle pod on a GPU node with the given
 // annotations (written verbatim; nil/empty ⇒ none) and waits for it to reach
 // Running, registering cleanup. Use DefaultWorkloadAnnotations for the standard
 // well-formed fractional pod.

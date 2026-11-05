@@ -3,14 +3,14 @@
 
 name: "E2E Setup"
 description: >-
-  Install the e2e toolchain (Go, Python, k3d, Helm) and bring up the
-  k3d + fake-gpu-operator cluster. This is the suite-agnostic infra shared by
+  Install the e2e toolchain (Go, Python, kind, Helm) and bring up the
+  kind + GPU Operator + Mokka cluster. This is the suite-agnostic infra shared by
   every e2e job — a suite job checks out the repo, runs this action, then does
   its own suite-specific image load + test run + teardown.
 
 inputs:
   gpu-worker-nodes:
-    description: "Number of GPU worker nodes (labeled into the fake-GPU node pool)."
+    description: "Number of GPU worker nodes (selected for Mokka)."
     required: false
     default: "2"
   non-gpu-worker-nodes:
@@ -18,11 +18,11 @@ inputs:
     required: false
     default: "1"
   cluster-name:
-    description: "k3d cluster name."
+    description: "kind cluster name."
     required: false
     default: "gpu-fractioning-e2e"
-  fake-gpu-operator-version:
-    description: "fake-gpu-operator chart version to install."
+  gpu-operator-version:
+    description: "NVIDIA GPU Operator chart version to install."
     required: true
 
 runs:
@@ -36,20 +36,17 @@ runs:
       with:
         python-version: "3.12"
 
-    - name: Install k3d
+    - name: Install kind
       shell: bash
       run: |
-        if command -v k3d &>/dev/null; then
-          echo "k3d already installed: $(k3d version | head -1)"
-        else
-          K3D_VERSION=v5.8.3
-          curl -fsSL -o /tmp/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
-          install /tmp/k3d /usr/local/bin/k3d && rm /tmp/k3d
-          k3d version
-        fi
+        curl -fsSL -o /tmp/kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+        install /tmp/kind /usr/local/bin/kind
+        kind version
 
     - name: Install Helm
       uses: azure/setup-helm@v4
+      with:
+        version: v3.19.0
 
     - name: Install Skaffold
       shell: bash
@@ -58,13 +55,13 @@ runs:
         install skaffold /usr/local/bin/ && rm skaffold
         skaffold version
 
-    - name: Create e2e cluster (k3d + fake-gpu-operator)
+    - name: Create e2e cluster (kind + GPU Operator + Mokka)
       shell: bash
       env:
         E2E_CLUSTER_NAME: ${{ inputs.cluster-name }}
         E2E_GPU_WORKER_NODES: ${{ inputs.gpu-worker-nodes }}
         E2E_NON_GPU_WORKER_NODES: ${{ inputs.non-gpu-worker-nodes }}
-        E2E_FAKE_GPU_OPERATOR_VERSION: ${{ inputs.fake-gpu-operator-version }}
+        E2E_GPU_OPERATOR_VERSION: ${{ inputs.gpu-operator-version }}
       run: make e2e-cluster-up
 
     - name: Verify cluster is up
@@ -98,5 +95,5 @@ runs:
 
         {
           echo "### ✅ Cluster is up and running"
-          echo "k3d cluster \`${E2E_CLUSTER_NAME}\`: **${ready_gpu_nodes}/${E2E_GPU_WORKER_NODES}** GPU nodes Ready, fake-gpu-operator installed."
+          echo "kind cluster \`${E2E_CLUSTER_NAME}\`: **${ready_gpu_nodes}/${E2E_GPU_WORKER_NODES}** GPU nodes Ready, GPU Operator + Mokka installed."
         } >> "$GITHUB_STEP_SUMMARY"

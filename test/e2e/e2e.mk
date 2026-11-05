@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # -----------------------------------------------------------
-# E2E (metrics-only, stage 1). Requires k3d, kubectl, helm, docker, python3
+# E2E. Requires kind, kubectl, helm, docker, python3
 # (see test/e2e/hack/requirements.txt).
 #
 #   make e2e                          # cluster up + load images + helm deploy + run tests
-#   make e2e-cluster-down             # tear down the k3d cluster
+#   make e2e-cluster-down             # tear down the kind cluster
 #
 # The gpu-fractioning stack is built and installed the way it ships, by Skaffold
 # (skaffold.yaml): it builds all four component images (operator, fractiond,
@@ -16,7 +16,7 @@
 # suite only connects to the deployed cluster and asserts — it deploys nothing.
 #
 # All knobs are E2E_* env vars — see test/e2e/README.md and
-# test/e2e/hack/create-cluster.py for the full list (node count, fake-gpu-operator
+# test/e2e/hack/create-cluster.py for the full list (node count, GPU Operator + Mokka
 # version, GPUs per node, etc).
 #
 # Included from the root Makefile, so all paths here are relative to the repo
@@ -26,13 +26,14 @@
 E2E_CLUSTER_NAME              ?= gpu-fractioning-e2e
 E2E_GPU_WORKER_NODES          ?= 2
 E2E_NON_GPU_WORKER_NODES      ?= 1
-E2E_FAKE_GPU_OPERATOR_VERSION ?= 0.2.0
+E2E_GPUS_PER_NODE             ?= 2
+E2E_GPU_OPERATOR_VERSION      ?= v26.7.2
 PYTHON                        ?= python3
 
-# Port of the k3d-managed local image registry create-cluster.py stands up.
+# Port of the local image registry create-cluster.py stands up.
 # Skaffold pushes the component images to localhost:$(E2E_REGISTRY_PORT) (see
 # --default-repo in E2E_SKAFFOLD_FLAGS); nodes pull them back via the cluster's
-# registries.yaml mirror. Must match create-cluster.py's E2E_REGISTRY_PORT.
+# containerd hosts.toml mirror. Must match create-cluster.py's E2E_REGISTRY_PORT.
 E2E_REGISTRY_PORT             ?= 5001
 
 # Namespace the operator chart is installed into (must match skaffold.yaml's
@@ -40,15 +41,14 @@ E2E_REGISTRY_PORT             ?= 5001
 E2E_OPERATOR_NAMESPACE        ?= gpu-fractioning
 
 # Dedicated kubeconfig for the e2e cluster. create-cluster.py writes it here
-# (it can't use ~/.kube/config — the NRI mount breaks `k3d kubeconfig`), and the
-# deploy/test targets below point kubectl/helm/skaffold/go-test at it. This keeps
+# and the deploy/test targets below point kubectl/helm/skaffold/go-test at it. This keeps
 # the whole flow off your default context (e.g. a remote cluster) entirely.
 E2E_KUBECONFIG                ?= $(HOME)/.kube/$(E2E_CLUSTER_NAME).yaml
 
 # Your default kubeconfig — only touched by the opt-in e2e-kubeconfig-merge/
 # -unmerge targets (never by the core flow).
 KUBECONFIG_DEFAULT            ?= $(HOME)/.kube/config
-E2E_KUBE_CONTEXT              := k3d-$(E2E_CLUSTER_NAME)
+E2E_KUBE_CONTEXT              := kind-$(E2E_CLUSTER_NAME)
 
 # Host arch, passed to Skaffold for metricsd's TARGETARCH build-arg (its
 # Dockerfile hardcodes ARG TARGETARCH=amd64, which otherwise wins over the build
@@ -58,10 +58,11 @@ E2E_ARCH                      ?= $(shell uname -m | sed -e 's/x86_64/amd64/' -e 
 export E2E_CLUSTER_NAME
 export E2E_GPU_WORKER_NODES
 export E2E_NON_GPU_WORKER_NODES
-export E2E_FAKE_GPU_OPERATOR_VERSION
+export E2E_GPUS_PER_NODE
+export E2E_GPU_OPERATOR_VERSION
 export E2E_ARCH
 export E2E_REGISTRY_PORT
-# create-cluster.py reads E2E_KUBECONFIG to decide where to write the kubeconfig;
+# create-cluster.py writes only the dedicated E2E_KUBECONFIG;
 # the Go suite (config.go) reads it to connect. skaffold/helm/kubectl instead read
 # KUBECONFIG, so the deploy/undeploy recipes set it inline from E2E_KUBECONFIG.
 export E2E_KUBECONFIG
@@ -75,13 +76,13 @@ e2e: e2e-cluster-up e2e-deploy test-e2e
 # E2E_GO_TEST wraps a suite's `go test` invocation. Each suite lives in its own
 # tests/<suite> package so a CI job can run exactly one suite.
 #
-# -timeout 20m (< the 25m job timeout): the metrics suite legitimately runs
+# -timeout 20m (< the job timeout): the metrics suite legitimately runs
 # ~10-11 min — each nvml-mock SetProcesses cycle restarts metricsd and waits for
 # the mounted ConfigMap to propagate (~90 s), across ~11 tests — so the timeout
 # must clear that with margin. Keeping it below the job timeout means a genuine
 # hang still dumps every goroutine's stack here instead of being silently killed
 # when the job is cancelled at its own limit.
-E2E_GO_TEST = cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_NVML_MOCK=1 E2E_GPU_COUNT_PER_NODE=2 go test -tags e2e -v -timeout 20m
+E2E_GO_TEST = cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_NVML_MOCK=1 E2E_GPU_COUNT_PER_NODE=$(E2E_GPUS_PER_NODE) go test -tags e2e -v -timeout 20m
 
 e2e-cluster-deps:
 	$(PYTHON) -m pip install -q -r test/e2e/hack/requirements.txt
@@ -115,7 +116,7 @@ e2e-kubeconfig-unmerge:
 	@KUBECONFIG="$(KUBECONFIG_DEFAULT)" kubectl config delete-cluster "$(E2E_KUBE_CONTEXT)" >/dev/null 2>&1 || true
 	@KUBECONFIG="$(KUBECONFIG_DEFAULT)" kubectl config unset "users.$(E2E_KUBE_CONTEXT)" >/dev/null 2>&1 || true
 
-# e2e-deploy builds all four images, pushes them to the k3d local registry, and
+# e2e-deploy builds all four images, pushes them to the kind local registry, and
 # helm installs the operator chart — all via `skaffold run -p e2e`
 # (skaffold.yaml). The current kube-context must point at the e2e cluster.
 #
@@ -123,9 +124,9 @@ e2e-kubeconfig-unmerge:
 #   --platform pins the build to the host arch instead of letting Skaffold probe
 #     the cluster for its node platform: that probe fails (and passes an empty
 #     --platform to metricsd's `FROM --platform=$TARGETPLATFORM`) whenever the
-#     current kube-context is unreachable or non-k3d.
+#     current kube-context is unreachable or non-kind.
 #   --default-repo=localhost:$(E2E_REGISTRY_PORT) makes Skaffold tag/push the
-#     images into the k3d local registry (create-cluster.py). Combined with
+#     images into the kind local registry (create-cluster.py). Combined with
 #     push:true + pullPolicy=IfNotPresent (skaffold.yaml e2e profile), a node
 #     that evicts an image under disk pressure re-pulls it from the registry
 #     instead of wedging at ErrImageNeverPull.
@@ -139,17 +140,13 @@ e2e-kubeconfig-unmerge:
 #
 # It then waits on the fractiond DaemonSet specifically (which hosts the metricsd
 # sidecar under test), NOT the operator's aggregate CR Ready condition. The chart
-# also creates the mpsd DaemonSet; under the e2e profile the shared runtime class
-# is cleared and fake images provide the NVIDIA/NVML behavior needed by tests.
+# also creates mpsd. Daemons use the real nvidia RuntimeClass. Fake MPS and the
+# test-controlled metrics NVML input remain explicit test dependencies.
 E2E_SKAFFOLD_FLAGS = --platform=linux/$(E2E_ARCH) --default-repo=localhost:$(E2E_REGISTRY_PORT) --cache-artifacts=false --verbosity=error
 
 e2e-deploy:
 	KUBECONFIG=$(E2E_KUBECONFIG) skaffold run -p e2e $(E2E_SKAFFOLD_FLAGS)
-	@# Skaffold pushed the images to the k3d local registry and pods pull them via
-	@# the registries.yaml mirror with pullPolicy=IfNotPresent, so no per-node
-	@# `k3d image import` pre-seed is needed. (It was also actively harmful:
-	@# importing a registry-tagged localhost:PORT/<repo> ref could hang for
-	@# minutes and blow the job timeout.)
+	@# Pods pull Skaffold's images through the containerd registry mirror.
 	@echo "Waiting for the operator to create the fractiond DaemonSet..."
 	@for i in $$(seq 1 60); do KUBECONFIG=$(E2E_KUBECONFIG) kubectl -n $(E2E_OPERATOR_NAMESPACE) get ds gpu-fractioning-fractiond >/dev/null 2>&1 && break; sleep 2; done
 	KUBECONFIG=$(E2E_KUBECONFIG) kubectl -n $(E2E_OPERATOR_NAMESPACE) rollout status ds/gpu-fractioning-fractiond --timeout=180s
@@ -171,7 +168,7 @@ test-e2e-metrics:
 # reads the baked-in nvml-mock library before it starts MPS. E2E_GPU_NODE_COUNT
 # primes the preflight.
 test-e2e-operator:
-	cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_GPU_COUNT_PER_NODE=2 go test -tags e2e -v -timeout 40m ./tests/operator/...
+	cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_GPU_COUNT_PER_NODE=$(E2E_GPUS_PER_NODE) go test -tags e2e -v -timeout 40m ./tests/operator/...
 
 # The fractiond suite exercises the fractiond NRI data plane (env/mount injection
 # on annotated workloads). It asserts daemon behavior, not GPU metrics. On fake
@@ -180,9 +177,9 @@ test-e2e-operator:
 # so it's much shorter than the operator suite — a 20m timeout clears it with
 # margin, under the job limit.
 test-e2e-fractiond:
-	cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_GPU_COUNT_PER_NODE=2 go test -tags e2e -v -timeout 20m ./tests/fractiond/...
+	cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_GPU_COUNT_PER_NODE=$(E2E_GPUS_PER_NODE) go test -tags e2e -v -timeout 20m ./tests/fractiond/...
 
 # run-e2e runs the suite against whatever cluster the caller provides
 # (set E2E_KUBECONFIG=...). The suite never provisions a cluster, so this works
-# against any cluster regardless of how it was created — not just k3d.
+# against any cluster regardless of how it was created — not just kind.
 run-e2e: test-e2e

@@ -5,13 +5,13 @@
 # Helm chart (operator/charts) in one flow — the "4 images, use Skaffold + Helm"
 # direction from PR review.
 #
-#   skaffold run -p e2e          # build + load into the local (k3d) cluster + helm install
+#   skaffold run -p e2e          # build + load into the local (kind) cluster + helm install
 #   skaffold dev -p e2e          # same, with rebuild/redeploy on file changes
 #   skaffold delete -p e2e       # uninstall
 #
 # The default profile builds prod-style images. The `e2e` profile switches mpsd
 # to the fake-mps Dockerfile and metricsd to Dockerfile.e2e (both bake in the
-# nvml-mock .so for fake-GPU clusters), then pushes the images to the k3d-managed
+# nvml-mock .so for fake-GPU clusters), then pushes the images to the kind-managed
 # local registry (create-cluster.py) with pullPolicy=IfNotPresent, so a node that
 # evicts an image under disk pressure re-pulls it instead of wedging at
 # ErrImageNeverPull.
@@ -22,9 +22,9 @@ metadata:
 
 build:
   # push:false (default profile) keeps images local; Skaffold auto-loads them
-  # into a k3d/kind cluster when the current kube-context is one. The e2e profile
+  # into a kind/kind cluster when the current kube-context is one. The e2e profile
   # overrides this to push:true and, with --default-repo=localhost:<port>
-  # (test/e2e/e2e.mk), pushes into the k3d local registry instead — so evicted
+  # (test/e2e/e2e.mk), pushes into the kind local registry instead — so evicted
   # images can be re-pulled. All Dockerfiles build from the repo root so their
   # cross-module COPYs resolve.
   #
@@ -76,7 +76,7 @@ deploy:
         namespace: gpu-fractioning
         createNamespace: true
         # Map each built image into the chart's images.<name>.{repository,tag}
-        # structure. Tag only (no digest): images are loaded into k3d by tag.
+        # structure. Tag only (no digest): images are loaded into kind by tag.
         setValueTemplates:
           images.operator.repository: "{{.IMAGE_REPO_gpu_fractioning}}"
           images.operator.tag: "{{.IMAGE_TAG_gpu_fractioning}}"
@@ -90,7 +90,7 @@ deploy:
 profiles:
   - name: e2e
     patches:
-      # Push into the k3d local registry (create-cluster.py) instead of
+      # Push into the kind local registry (create-cluster.py) instead of
       # auto-loading images once. Paired with --default-repo=localhost:<port>
       # (test/e2e/e2e.mk) and pullPolicy=IfNotPresent below, this lets a node
       # re-pull an image it evicted under disk pressure.
@@ -101,14 +101,13 @@ profiles:
       # nvidia/cuda-based build. It bundles the REAL mpsd supervisor, nvml-mock
       # for the startup driver-major label, and a fake nvidia-cuda-mps-control
       # that just creates the MPS control socket and idles, so mpsd reaches Ready
-      # on a GPU-less k3d node. Paired with create-cluster.py repointing the
-      # "nvidia" RuntimeClass at runc, this lets the operator reach full Ready
-      # without a GPU.
+      # on a GPU-less kind node. The real nvidia RuntimeClass and GPU Operator remain enabled; only
+      # the MPS control program is fake, because Mokka cannot execute CUDA.
       - op: replace
         path: /build/artifacts/2/docker/dockerfile
         value: hack/fake-mps/Dockerfile
       # metricsd: use the e2e Dockerfile which bakes in the nvml-mock .so so
-      # NVML calls resolve on fake-GPU k3d clusters without a real NVIDIA driver.
+      # NVML calls resolve on fake-GPU kind clusters without a real NVIDIA driver.
       - op: replace
         path: /build/artifacts/3/docker/dockerfile
         value: fractioning-manager/metricsd/Dockerfile.e2e
@@ -117,7 +116,7 @@ profiles:
         path: /build/artifacts/3/docker/buildArgs
         value:
           TARGETARCH: "{{.E2E_ARCH}}"
-      # Pull from the k3d local registry on demand; IfNotPresent means a node
+      # Pull from the kind local registry on demand; IfNotPresent means a node
       # that evicted an image re-pulls it (vs. Never, which wedges forever).
       - op: add
         path: /deploy/helm/releases/0/setValues
@@ -126,10 +125,8 @@ profiles:
           images.fractiond.pullPolicy: IfNotPresent
           images.mpsd.pullPolicy: IfNotPresent
           images.metricsd.pullPolicy: IfNotPresent
-          metricsAgent.runtimeClassName: ""
-      # Clear fractiond's metrics runtimeClassName via a values file; the e2e
-      # metricsd image provides nvml-mock itself, and skaffold drops empty-string
-      # setValues entries, so --set can't do this.
+      # Keep controlled NVML process input for metricsd and select the real
+      # nvidia runtime provided by GPU Operator.
       - op: add
         path: /deploy/helm/releases/0/valuesFiles
         value: [ "operator/charts/e2e-values.yaml" ]
