@@ -304,6 +304,39 @@ func TestDetectorFailOpenAuditsUnusableComputeMode(t *testing.T) {
 	}
 }
 
+// TestDetectorNonUUIDDeviceAssignment mirrors buildAdjustment for a device
+// assignment that is not a UUID list. Fail-closed never created the container,
+// so the audit skips it; fail-open created it without NVIDIA_VISIBLE_DEVICES,
+// so the audit still reports the missing memory injection but does not demand
+// a device env it would never have injected.
+func TestDetectorNonUUIDDeviceAssignment(t *testing.T) {
+	ctr := &api.Container{
+		Id: "c", Name: "trainer", PodSandboxId: "p",
+		State: api.ContainerState_CONTAINER_RUNNING,
+	}
+
+	t.Run("fail-closed skips the container", func(t *testing.T) {
+		pod := withVisibleDevices(fractioningPod("p", "pod", "trainer", "4Gi", "2Gi"), "trainer", "all")
+		if got := newDetector().violators([]*api.PodSandbox{pod}, []*api.Container{ctr}); len(got) != 0 {
+			t.Fatalf("expected no violators, got %+v", got)
+		}
+	})
+
+	t.Run("fail-open audits without the device env", func(t *testing.T) {
+		pod := withVisibleDevices(fractioningPod("p", "pod", "trainer", "4Gi", "2Gi"), "trainer", "all")
+		got := newDetectorFailOpen().violators([]*api.PodSandbox{pod}, []*api.Container{ctr})
+		if len(got) != 1 {
+			t.Fatalf("expected the container to be audited, got %d violators: %+v", len(got), got)
+		}
+		assertSameSet(t, got[0].missing, []string{
+			"env:" + injection.EnvMPSPipeDirectory,
+			"env:" + injection.EnvGPUMemoryLimit,
+			"env:" + injection.EnvGPUMemoryRequest,
+			defaultMountMissing,
+		})
+	})
+}
+
 func TestDetectorViolationsSkipsContainerWithoutPod(t *testing.T) {
 	// A container whose PodSandboxId matches no pod in the snapshot must be
 	// skipped rather than panic or flagged.

@@ -26,6 +26,11 @@ const (
 	memoryInfix   = "gpu-memory"
 	devicesSuffix = "gpus.devices"
 
+	// The device assignment is a list of NVIDIA GPU or MIG UUIDs, which carry
+	// these prefixes; nothing else is accepted from the annotation.
+	gpuUUIDPrefix = "GPU-"
+	migUUIDPrefix = "MIG-"
+
 	// Annotation key suffixes appended after the memory infix.
 	annotationSuffixRequest = "request"
 	annotationSuffixLimit   = "limit"
@@ -162,21 +167,57 @@ func ParseGPUMemoryAnnotations(annotations map[string]string, containerName, pre
 }
 
 // ParseVisibleDevices returns the GPU device assignment the scheduler recorded
-// for a specific container — the per-container key
+// for a specific container, the per-container key
 // "<prefix><containerName>.gpus.devices" (e.g.
-// "nvidia.com/container.trainer.gpus.devices") — trimmed of surrounding
-// whitespace. The value is a comma-separated list of NVIDIA GPU UUIDs (or
-// indices), e.g. "GPU-abc123,GPU-def456". A fractional container does not request
-// the nvidia.com/gpu resource, so the NVIDIA device plugin never injects
-// NVIDIA_VISIBLE_DEVICES; fractiond reads this annotation and injects it (as
-// injection.EnvVisibleDevices) so the container sees exactly the GPU the
-// scheduler picked. It returns "" when the annotation is absent or blank, which
-// the caller treats as "no assignment to inject" (so a container that already
-// carries NVIDIA_VISIBLE_DEVICES is left untouched). The value is passed through
-// verbatim otherwise — its format (UUID list, index list, or "all") is the
-// NVIDIA container runtime's contract, not this operator's.
-func ParseVisibleDevices(annotations map[string]string, containerName, prefix string) string {
-	return strings.TrimSpace(annotations[containerDevicesAnnotationKey(prefix, containerName)])
+// "nvidia.com/container.trainer.gpus.devices"), as a comma-separated list of
+// NVIDIA GPU or MIG UUIDs ("GPU-...", "MIG-..."), each optionally qualified as
+// a CDI device ("k8s.device-plugin.nvidia.com/gpu=GPU-..."), which is how the
+// scheduler writes it where the device plugin runs in CDI mode. A fractional
+// container does not request the nvidia.com/gpu resource, so the NVIDIA device
+// plugin never injects NVIDIA_VISIBLE_DEVICES; fractiond reads this annotation
+// and injects it (as injection.EnvVisibleDevices) so the container sees exactly
+// the GPU the scheduler picked. It returns "" when the annotation is absent or
+// blank, which the caller treats as "no assignment to inject".
+//
+// Anything else is an error. "all", "none", "void" and bare indices are values
+// the NVIDIA container runtime would accept, but they are not an assignment
+// the scheduler makes, and passing them through would hand a container GPUs it
+// was never allocated.
+func ParseVisibleDevices(annotations map[string]string, containerName, prefix string) (string, error) {
+	key := containerDevicesAnnotationKey(prefix, containerName)
+	raw := strings.TrimSpace(annotations[key])
+	if raw == "" {
+		return "", nil
+	}
+
+	devices := strings.Split(raw, ",")
+	for i, device := range devices {
+		device = strings.TrimSpace(device)
+		if !isDeviceReference(device) {
+			return "", fmt.Errorf("%s=%q is not a comma-separated list of GPU or MIG UUIDs", key, raw)
+		}
+		devices[i] = device
+	}
+	return strings.Join(devices, ","), nil
+}
+
+// isDeviceReference reports whether device is an NVIDIA GPU or MIG UUID, bare
+// or qualified as a CDI device ("<vendor>/<class>=<uuid>"), the only shapes the
+// scheduler writes into the device assignment.
+func isDeviceReference(device string) bool {
+	if kind, name, qualified := strings.Cut(device, "="); qualified {
+		vendor, class, ok := strings.Cut(kind, "/")
+		if !ok || vendor == "" || class == "" || strings.Contains(class, "/") {
+			return false
+		}
+		device = name
+	}
+	for _, prefix := range []string{gpuUUIDPrefix, migUUIDPrefix} {
+		if strings.HasPrefix(device, prefix) && len(device) > len(prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseComputeMode extracts the compute-mode selection for a specific
