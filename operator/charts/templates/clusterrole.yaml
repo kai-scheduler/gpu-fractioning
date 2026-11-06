@@ -67,7 +67,8 @@ rules:
       - watch
   # Read individual nodes to preserve LastTransitionTime when patching
   # conditions, list targeted nodes during finalizer cleanup on CR deletion,
-  # and remove the gpu-fractioning-owned driver-major label during that cleanup.
+  # and remove the driver-major node label that mpsd wrote in releases up to
+  # 0.1.8 during that cleanup.
   # Reads go through the uncached API reader, not a cached list/watch informer,
   # so no "watch" verb.
   - apiGroups:

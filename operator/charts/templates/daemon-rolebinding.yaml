@@ -3,14 +3,15 @@ Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: {{ include "gpu-fractioning.fullname" . }}-daemon
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "gpu-fractioning.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: {{ include "gpu-fractioning.fullname" . }}-daemon
 subjects:
   - kind: ServiceAccount
