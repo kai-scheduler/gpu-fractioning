@@ -119,6 +119,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   not backfilled.
 
 ### Changed
+- mpsd now records the node-local NVIDIA driver major version as an annotation
+  on its own pod instead of a label on the Node, and the operator reads it from
+  the mpsd pod of the node it is diagnosing. The daemon ServiceAccount, which is
+  mounted into the privileged host-PID mpsd and fractiond pods on every GPU
+  node, used to hold a cluster-wide `patch` on `nodes` for that one write, which
+  let any of those pods relabel, taint or cordon any node in the cluster. The
+  chart now grants it a `patch` on `pods` in the release namespace only; the
+  daemon `ClusterRole` and `ClusterRoleBinding` are removed on upgrade. The
+  key (`gpu-fractioning.kai.scheduler/nvidia-driver-version.major`) and the
+  `GPUDriverVersion*` reasons on the `Ready` condition are unchanged, and the
+  operator still clears the old node label when the `GpuFractioningConfig` is
+  deleted.
 - The `Ready` condition message on `GpuFractioningConfig` now says how many nodes
   a failing component is down on, e.g. `not ready: MpsdReady (7 of 10 pods ready)`
   instead of `not ready: MpsdReady`, so one bad node is distinguishable from all

@@ -1,6 +1,11 @@
 // Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+// Package driverlabel records the node-local NVIDIA driver major version, read
+// through NVML, on the mpsd pod. It used to label the Node, which needed a
+// cluster-wide nodes/patch grant for a privileged, host-PID pod; annotating the
+// pod it runs in needs only a namespaced pods/patch, and the operator reads the
+// annotation from the mpsd pod of a node where it needs it.
 package driverlabel
 
 import (
@@ -22,20 +27,22 @@ import (
 )
 
 const (
-	envNodeName           = "NODE_NAME"
+	envPodName            = "POD_NAME"
+	envPodNamespace       = "POD_NAMESPACE"
 	defaultRequestTimeout = 10 * time.Second
 )
 
-// LabelCurrentNode reads the local NVIDIA driver version via NVML and labels
-// the current node with the parsed driver major branch.
-func LabelCurrentNode(ctx context.Context, logger *slog.Logger) error {
+// RecordDriverMajor reads the local NVIDIA driver version via NVML and
+// annotates the current pod with the parsed driver major branch.
+func RecordDriverMajor(ctx context.Context, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	nodeName := os.Getenv(envNodeName)
-	if nodeName == "" {
-		return fmt.Errorf("%s is required", envNodeName)
+	podName := os.Getenv(envPodName)
+	podNamespace := os.Getenv(envPodNamespace)
+	if podName == "" || podNamespace == "" {
+		return fmt.Errorf("%s and %s are required", envPodName, envPodNamespace)
 	}
 
 	driverVersion, err := driverVersionFromNVML(logger)
@@ -48,11 +55,11 @@ func LabelCurrentNode(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("parse NVIDIA driver version %q: %w", driverVersion, err)
 	}
 
-	if err := patchNodeDriverMajor(ctx, nodeName, major); err != nil {
+	if err := patchPodDriverMajor(ctx, podNamespace, podName, major); err != nil {
 		return err
 	}
 
-	logger.Info("labeled node with NVIDIA driver major version",
+	logger.Info("recorded NVIDIA driver major version on the pod",
 		"driverVersion", driverVersion,
 		"driverMajor", major,
 	)
@@ -82,42 +89,42 @@ func driverVersionFromNVML(logger *slog.Logger) (string, error) {
 	return version, nil
 }
 
-func patchNodeDriverMajor(ctx context.Context, nodeName string, major int) error {
-	client, err := inClusterNodeInterface()
+func patchPodDriverMajor(ctx context.Context, namespace, name string, major int) error {
+	client, err := inClusterPodInterface(namespace)
 	if err != nil {
 		return err
 	}
-	return patchNodeDriverMajorWithClient(ctx, client, nodeName, major)
+	return patchPodDriverMajorWithClient(ctx, client, name, major)
 }
 
-func patchNodeDriverMajorWithClient(ctx context.Context, client corev1client.NodeInterface, nodeName string, major int) error {
-	body, err := driverMajorLabelPatch(major)
+func patchPodDriverMajorWithClient(ctx context.Context, client corev1client.PodInterface, name string, major int) error {
+	body, err := driverMajorAnnotationPatch(major)
 	if err != nil {
 		return err
 	}
 
-	if _, err := client.Patch(ctx, nodeName, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
-		return fmt.Errorf("patch node %s label %q: %w", nodeName, driverinfo.NVIDIADriverMajorLabel, err)
+	if _, err := client.Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("patch pod %s annotation %q: %w", name, driverinfo.NVIDIADriverMajorAnnotation, err)
 	}
 	return nil
 }
 
-func driverMajorLabelPatch(major int) ([]byte, error) {
+func driverMajorAnnotationPatch(major int) ([]byte, error) {
 	if major <= 0 {
 		return nil, fmt.Errorf("driver major must be positive")
 	}
 
 	patch := map[string]any{
 		"metadata": map[string]any{
-			"labels": map[string]string{
-				driverinfo.NVIDIADriverMajorLabel: strconv.Itoa(major),
+			"annotations": map[string]string{
+				driverinfo.NVIDIADriverMajorAnnotation: strconv.Itoa(major),
 			},
 		},
 	}
 	return json.Marshal(patch)
 }
 
-func inClusterNodeInterface() (corev1client.NodeInterface, error) {
+func inClusterPodInterface(namespace string) (corev1client.PodInterface, error) {
 	restCfg, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
@@ -128,5 +135,5 @@ func inClusterNodeInterface() (corev1client.NodeInterface, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes CoreV1 client: %w", err)
 	}
-	return coreClient.Nodes(), nil
+	return coreClient.Pods(namespace), nil
 }

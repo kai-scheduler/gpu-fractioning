@@ -3,17 +3,19 @@ Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ include "gpu-fractioning.fullname" . }}-daemon
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "gpu-fractioning.labels" . | nindent 4 }}
 rules:
-  # The mpsd container patches only its own node's gpu-fractioning-owned NVIDIA
-  # driver-major label during startup.
+  # mpsd records the node-local NVIDIA driver major version as an annotation on
+  # its own pod during startup; the operator reads it from there. Nothing the
+  # daemons do needs a cluster-scoped grant.
   - apiGroups:
       - ""
     resources:
-      - nodes
+      - pods
     verbs:
       - patch

@@ -206,6 +206,12 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 	if got := envFieldRef(ctr.Env, "NODE_NAME"); got != "spec.nodeName" {
 		t.Errorf("NODE_NAME fieldRef = %q, want spec.nodeName", got)
 	}
+	if got := envFieldRef(ctr.Env, "POD_NAME"); got != "metadata.name" {
+		t.Errorf("POD_NAME fieldRef = %q, want metadata.name", got)
+	}
+	if got := envFieldRef(ctr.Env, "POD_NAMESPACE"); got != "metadata.namespace" {
+		t.Errorf("POD_NAMESPACE fieldRef = %q, want metadata.namespace", got)
+	}
 	if got := envValue(ctr.Env, "NVIDIA_VISIBLE_DEVICES"); got != "all" {
 		t.Errorf("NVIDIA_VISIBLE_DEVICES env = %q, want %q", got, "all")
 	}

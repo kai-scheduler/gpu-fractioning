@@ -1,0 +1,66 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The daemon ServiceAccount is mounted into privileged, host-PID pods on every
+# GPU node. Its only API need is for mpsd to annotate its own pod, so the grant
+# must stay a namespaced Role on pods and never grow back into a ClusterRole.
+suite: daemon rbac
+release:
+  name: gpu-fractioning
+  namespace: gpu-fractioning
+templates:
+  - daemon-role.yaml
+  - daemon-rolebinding.yaml
+tests:
+  - it: grants the daemons pod patch in the release namespace only
+    template: daemon-role.yaml
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.name
+          value: gpu-fractioning-daemon
+      - equal:
+          path: metadata.namespace
+          value: gpu-fractioning
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - ""
+              resources:
+                - pods
+              verbs:
+                - patch
+
+  - it: binds the Role to the daemon ServiceAccount
+    template: daemon-rolebinding.yaml
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: gpu-fractioning
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: gpu-fractioning-daemon
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: gpu-fractioning-daemon
+              namespace: gpu-fractioning
+
+  - it: follows a custom daemon ServiceAccount name
+    template: daemon-rolebinding.yaml
+    set:
+      daemonServiceAccount:
+        create: false
+        name: custom-daemon
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: custom-daemon
