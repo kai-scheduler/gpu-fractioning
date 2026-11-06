@@ -147,7 +147,26 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
 
-	visibleDevices := annotations.ParseVisibleDevices(pod.GetAnnotations(), container.GetName(), d.annotationPrefix)
+	// Same policy as buildAdjustment for a device assignment that is not a
+	// UUID list: fail-closed blocked creation, so skip; fail-open created the
+	// container without NVIDIA_VISIBLE_DEVICES, so audit it without one.
+	visibleDevices, err := annotations.ParseVisibleDevices(pod.GetAnnotations(), container.GetName(), d.annotationPrefix)
+	if err != nil {
+		if !d.failOpen {
+			d.logger().Warn("audit: skipping container with unusable GPU device assignment annotation",
+				"container", container.GetName(),
+				"pod", pod.GetName(),
+				"error", err,
+			)
+			return violator{}, false
+		}
+		d.logger().Warn("audit: unusable GPU device assignment annotation, auditing without NVIDIA_VISIBLE_DEVICES (fail-open)",
+			"container", container.GetName(),
+			"pod", pod.GetName(),
+			"error", err,
+		)
+		visibleDevices = ""
+	}
 	missing := d.missingInjection(cfg, visibleDevices, computeMode, container)
 	if len(missing) == 0 {
 		return violator{}, false
