@@ -17,7 +17,7 @@ On **AMD GPUs**, fractiond enforces the same annotations with the Linux dmem cgr
 5. The NVIDIA driver enforces `NVIDIA_GPU_MEMORY_LIMIT` as a hard cap, so a container cannot allocate beyond its share and impact its neighbors on the same GPU. A container that exceeds its limit is terminated (out-of-memory), the same way a container exceeding its Kubernetes memory limit is.
 6. **metricsd** (a sidecar alongside fractiond) exports per-pod GPU memory and utilization metrics for the shared GPUs.
 
-On AMD GPU nodes only fractiond runs: in step 4 it has the runtime write the container's `dmem.max` (limit) and `dmem.min` (request) for each assigned GPU, and in step 5 the kernel enforces them. There is no MPS and no metricsd there yet. See [AMD GPUs](#amd-gpus).
+On AMD GPU nodes only fractiond runs: in step 4 it has the runtime write the container's `dmem.max` (the limit) for each assigned GPU, and in step 5 the kernel enforces it. There is no MPS and no metricsd there yet. See [AMD GPUs](#amd-gpus).
 
 ## Architecture
 
@@ -57,9 +57,10 @@ On AMD GPU nodes only fractiond runs: in step 4 it has the runtime write the con
 
 The NVIDIA requirements above do not apply to AMD GPU nodes. There fractiond needs:
 
-- Linux **6.14 or newer** with the `amdgpu` driver, so each GPU's VRAM is a dmem region (`/sys/fs/cgroup/dmem.capacity`), and cgroup v2 with `dmem` enabled down to the containers
-- containerd 2.0+ or CRI-O with **NRI enabled**, and a runtime that applies `linux.resources.unified` (runc does)
+- Linux **6.15 or newer** with `CONFIG_CGROUP_DMEM` and the `amdgpu` driver, so each GPU's VRAM is a dmem region (`/sys/fs/cgroup/dmem.capacity`), and cgroup v2 with `dmem` enabled down to the containers
+- containerd 2.0+ or CRI-O with **NRI enabled**; runc 1.2.0+ or crun for containers on more than one GPU
 - the GPU given to the container by AMD's device plugin or by the scheduler, and the GPUs' PCI addresses in `gpus.devices`
+- the host's `/sys/fs/cgroup` mounted read-only into fractiond, for `dmem.capacity`
 
 See the [AMD guide](docs/amd/README.md).
 
@@ -293,15 +294,15 @@ annotations:
 ### AMD GPUs
 
 fractiond also enforces the same annotations on AMD GPUs, with `--gpu-vendor=amd` (or `GPU_VENDOR=amd`). There is no
-driver-side limit for AMD GPUs; instead the Linux **dmem cgroup controller** (Linux 6.14+, `amdgpu`) caps a cgroup's
+driver-side limit for AMD GPUs; instead the Linux **dmem cgroup controller** (Linux 6.15+, `amdgpu`) caps a cgroup's
 VRAM, and amdgpu registers each GPU's VRAM as the region `drm/<PCI address>/vram`. For a container with GPU-memory
 annotations, fractiond has the runtime write on the container's cgroup:
 
 | Annotation | cgroup file | Effect |
 | --- | --- | --- |
 | `<prefix><name>.gpu-memory.limit` | `dmem.max` | the kernel refuses allocations past it (`hipErrorOutOfMemory`) |
-| `<prefix><name>.gpu-memory.request` | `dmem.min` | memory protected from eviction by other cgroups |
-| `<prefix><name>.gpus.devices` | which regions | the GPUs' PCI addresses, e.g. `0000:03:00.0`; the request and limit apply to each |
+| `<prefix><name>.gpu-memory.request` | nothing | accounting only, as on NVIDIA GPUs |
+| `<prefix><name>.gpus.devices` | which regions | the GPUs' PCI addresses, e.g. `0000:03:00.0`; the limit applies to each |
 
 ```yaml
 annotations:
@@ -310,13 +311,17 @@ annotations:
   nvidia.com/container.trainer.gpus.devices: "0000:03:00.0"
 ```
 
-- The limits are set through NRI (`linux.resources.unified`), so fractiond needs no access to the host's cgroup tree.
-  The kubelet enables the `dmem` controller down to each container wherever the kernel offers it.
-- The device list is required: without it, or with a value that is not a PCI address, container creation fails
-  (or the container is left uncapped if fractiond is running fail-open). A GPU whose VRAM is not a dmem region (an
-  older kernel) also fails container creation: the runtime cannot write the limit.
+- The limit is set through NRI (`linux.resources.unified`): the runtime writes it, and fractiond only reads the
+  host's `dmem.capacity` (read-only). The kubelet enables the `dmem` controller down to each container wherever the
+  kernel offers it.
+- The device list is required: without it, with a value that is not a PCI address, or naming a GPU whose VRAM is not
+  a dmem region on the node, fractiond refuses the container with a clear error (or leaves it uncapped if it is
+  running fail-open). fractiond is ready only on nodes with at least one GPU VRAM region.
+- Only VRAM is capped, not GTT (host memory the GPU maps), and the cap is per card, so Instinct compute partitions
+  share one cap.
 - The GPU itself reaches the container as before, through AMD's device plugin or the scheduler's device injection.
-- AMD GPUs have no MPS: `sm-sharing` is rejected and compute is time-sliced. Retroactive enforcement is turned off.
+- AMD GPUs have no MPS: `sm-sharing` is rejected and compute is time-sliced. Retroactive enforcement sets a missing
+  `dmem.max` in place on containers created while fractiond was down, instead of stopping them.
 - ROCm still reports the whole GPU's memory to the process (`hipMemGetInfo`), so frameworks that size themselves
   from it (vLLM's `--gpu-memory-utilization`, PyTorch's memory fraction) should be told the share.
 - The operator does not deploy fractiond on AMD GPU nodes yet, and metricsd has no AMD support yet; requirements, a
@@ -367,7 +372,7 @@ metricsd exports per-pod GPU metrics (Prometheus, plain HTTP). Built-in metric n
 
 The controller also exports operational metrics (`gpu_fractioning_daemon_ready_nodes`, `gpu_fractioning_daemon_desired_nodes`, `gpu_fractioning_nodes_ready`, `gpu_fractioning_nodes_degraded`) plus the standard controller-runtime `controller_runtime_reconcile_*` series.
 
-metricsd reads NVIDIA GPUs through NVML; on AMD GPU nodes there are no per-pod metrics yet. A container's VRAM usage is in `dmem.current` on its cgroup (see the [AMD guide](docs/amd/README.md#checking-a-limit)).
+metricsd reads NVIDIA GPUs through NVML; on AMD GPU nodes there are no per-pod metrics yet, and the container→pod mapping fractiond hands to metricsd carries no GPU identity for AMD containers (it records NVIDIA device minors only). A container's VRAM usage is in `dmem.current` on its cgroup (see the [AMD guide](docs/amd/README.md#checking-a-limit)).
 
 With the Prometheus Operator installed, set `prometheus.enabled=true` to have the chart create a `ServiceMonitor` (controller) and a `PodMonitor` (metricsd, one scrape target per GPU node). Both are gated on `metrics.enabled` as well, so setting `metrics.enabled=false` drops the metricsd `PodMonitor` too, not just the controller `ServiceMonitor`. Both scrape over plain HTTP; restrict access with a NetworkPolicy if needed. Metric names are overridable via `metricsAgent.metricNames` / `spec.metricsAgent.metricNames`.
 
