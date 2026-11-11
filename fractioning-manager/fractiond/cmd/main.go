@@ -34,7 +34,9 @@ func main() {
 	// CRI runtime socket (NRI has no stop call). Build the stopper only when the
 	// feature is on, and close it on exit.
 	var stopper audit.ContainerStopper
-	if flags.retroactiveEnforcement {
+	// On AMD GPU nodes retroactive enforcement updates the containers through NRI
+	// instead of stopping them, so no stopper is needed there.
+	if flags.retroactiveEnforcement && flags.gpuVendor != internal.VendorAMD {
 		cri := audit.NewCRIStopper(flags.criSocket, flags.stopTimeout, logger)
 		defer func() { _ = cri.Close() }()
 		stopper = cri
@@ -53,6 +55,7 @@ func main() {
 		Log:                    logger,
 		Readiness:              readyState,
 		Vendor:                 flags.gpuVendor,
+		DmemCapacityFile:       flags.dmemCapacityFile,
 	}, stopper)
 	if err != nil {
 		logger.Error("failed to create plugin", "error", err)
