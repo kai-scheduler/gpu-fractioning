@@ -96,7 +96,7 @@ func TestProcessorReplace(t *testing.T) {
 	}
 }
 
-func TestProcessorSkipsReplaceOnlyForEmptyRuntimeSnapshot(t *testing.T) {
+func TestProcessorSkipsReplaceOnlyWhenSnapshotHasNoContainers(t *testing.T) {
 	w := &fakeWriter{}
 	p := newTestProcessor(w, Options{})
 
