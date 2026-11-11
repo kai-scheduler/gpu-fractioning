@@ -36,25 +36,53 @@ func TestDevices(t *testing.T) {
 	}
 }
 
-func TestLimits(t *testing.T) {
+func TestMaxValue(t *testing.T) {
 	devices := []string{"0000:03:00.0", "0000:83:00.0"}
-	minValue, maxValue, err := Limits("2048", "11516", devices)
+	value, err := MaxValue("11516", devices)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "drm/0000:03:00.0/vram 2147483648\ndrm/0000:83:00.0/vram 2147483648"; minValue != want {
-		t.Errorf("dmem.min = %q, want %q", minValue, want)
+	if want := "drm/0000:03:00.0/vram 12075401216\ndrm/0000:83:00.0/vram 12075401216"; value != want {
+		t.Errorf("dmem.max = %q, want %q", value, want)
 	}
-	if want := "drm/0000:03:00.0/vram 12075401216\ndrm/0000:83:00.0/vram 12075401216"; maxValue != want {
-		t.Errorf("dmem.max = %q, want %q", maxValue, want)
+	// The kernel takes exactly one region per write (dmemcg_limit_write); the
+	// runtime splits the value by line. Each line must therefore be a whole
+	// "<region> <bytes>" pair on its own.
+	for i, line := range strings.Split(value, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != Region(devices[i]) || strings.ContainsAny(line, "\t\r") {
+			t.Errorf("line %d = %q, want %q followed by one byte count", i, line, Region(devices[i]))
+		}
 	}
-	for _, tc := range []struct{ request, limit, err string }{
-		{"x", "1", "invalid GPU memory request"},
-		{"1", "0", "invalid GPU memory limit"},
-		{"8", "4", "above the limit"},
+	for _, tc := range []struct{ limit, err string }{
+		{"x", "invalid GPU memory limit"},
+		{"0", "invalid GPU memory limit"},
+		{"-1", "invalid GPU memory limit"},
+		{"8796093022208", "too large"}, // 2^43 MiB: the byte count would overflow int64
 	} {
-		if _, _, err := Limits(tc.request, tc.limit, devices[:1]); err == nil || !strings.Contains(err.Error(), tc.err) {
-			t.Errorf("Limits(%s, %s): err = %v, want %q", tc.request, tc.limit, err, tc.err)
+		if _, err := MaxValue(tc.limit, devices[:1]); err == nil || !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("MaxValue(%s): err = %v, want %q", tc.limit, err, tc.err)
+		}
+	}
+	if _, err := MaxValue("8796093022207", devices[:1]); err != nil {
+		t.Errorf("largest limit: %v", err)
+	}
+}
+
+func TestParseCapacity(t *testing.T) {
+	regions, err := ParseCapacity(strings.NewReader("drm/0000:83:00.0/vram 51522830336\ndrm/0000:03:00.0/vram 51522830336\ndrm/0000:00:02.0/vram0 4294967296\n\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regions["drm/0000:03:00.0/vram"] != 51522830336 || len(regions) != 3 {
+		t.Fatalf("regions = %v", regions)
+	}
+	if got := strings.Join(VRAMRegions(regions), ","); got != "drm/0000:03:00.0/vram,drm/0000:83:00.0/vram" {
+		t.Errorf("VRAMRegions = %s", got)
+	}
+	for _, bad := range []string{"drm/0000:03:00.0/vram", "drm/0000:03:00.0/vram x"} {
+		if _, err := ParseCapacity(strings.NewReader(bad)); err == nil {
+			t.Errorf("ParseCapacity(%q): want an error", bad)
 		}
 	}
 }
