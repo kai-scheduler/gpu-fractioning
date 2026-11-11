@@ -289,7 +289,7 @@ A single cluster-scoped CR configures the whole stack. Field docs are authoritat
 | `spec.runtimeClassName` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access. Defaults to `nvidia`; set `""` to use the node default runtime. |
 | `spec.fractioningAgent` | fractiond options (annotation prefix, log level, fail-open, retroactive enforcement). |
 | `spec.metricsAgent` | metricsd options (`enabled`, metric-name overrides, extra NVML volumes/mounts). |
-| `spec.mpsDaemon` | mpsd supervisor options (e.g. `gracefulStopDelay`). |
+| `spec.mpsDaemon` | mpsd supervisor options (e.g. `gracefulStopDelay`) and `resources`, which overrides the mpsd container's requests and limits key by key (defaults: 50m CPU, 64Mi memory and 100Mi ephemeral-storage requested, 1Gi memory limit). The MPS control daemon's memory grows with the number of GPUs on the node; set it from the chart's `mpsd.resources`. |
 
 Status is surfaced as conditions on the CR:
 - **`FractiondReady`** / **`MpsdReady`** — per-daemon rollout health (ready vs desired nodes).
