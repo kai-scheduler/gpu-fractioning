@@ -64,6 +64,8 @@ helm install gpu-operator nvidia/gpu-operator \
 
 The mpsd DaemonSet labels each GPU node with the node-local NVIDIA driver major version at startup (`gpu-fractioning.kai.scheduler/nvidia-driver-version.major`) and the dependency check requires major **>= 615**, so any `r615` release satisfies it.
 
+On a node whose driver is older than r615, mpsd logs that the driver is below the minimum and exits before starting the MPS control daemon, instead of letting a pre-r615 `nvidia-cuda-mps-control` reject the MPS v3 flags. The pod still restarts, so on a mixed cluster the `GpuFractioningConfig` reports `MpsdReady=False` with the `GPUDriverVersionUnsupported` reason for that node until its driver is upgraded or the node is left out of `spec.nodeSelector`.
+
 Driver-version diagnostics intentionally use this gpu-fractioning-owned label rather than the GPU Operator label `nvidia.com/cuda.driver-version.major`. The GPU Operator label can be missing, stale, or unavailable when the NVIDIA driver is installed by another mechanism, such as managed cloud images or custom node images. Reading the actual node-local driver version through NVML keeps the reported reason tied to the driver state that the node daemons run against.
 
 The label is written by mpsd during startup. NVIDIA GPU Operator driver upgrades drain and reschedule the mpsd pod, so the label is refreshed after those supported upgrades. If you change the driver out of band without recreating the pod, delete the mpsd pod on that node so startup reruns and refreshes the label.

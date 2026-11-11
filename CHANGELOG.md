@@ -156,6 +156,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - The GPU Operator dependency check now gates on the operand versions gpu-fractioning actually depends on — **container toolkit v1.20.1** and **device plugin v0.20.1**, read from the `ClusterPolicy` `spec.toolkit.version` and `spec.devicePlugin.version` — instead of inferring them from the GPU Operator version, which is no longer gated at all where a `ClusterPolicy` exists. v26.7.1 is still the first release whose defaults satisfy both operands, but the operator version was never the real requirement: each operand version is independently overridable, so the old check rejected working clusters (v26.7.0 with the operands overridden, as the README documented) and admitted broken ones (v26.7.1 or newer with the toolkit pinned below its floor, where fractiond injects GPU-memory limits that no CDI hook applies and GPU memory goes unfenced with nothing reported). An operand below its minimum is now reported on the `Ready` condition with the new reason `GPUOperandVersionUnsupported` and the node-level daemons are not rolled out. An operand left unset on the `ClusterPolicy` runs the GPU Operator's own build default, so it is resolved through the GPU Operator floor, which stays at **v26.7.1** — the first release whose defaults satisfy both operands. That inference is valid precisely because nothing pinned the operand, and so is not applied to one that is pinned. An operand pinned to an opaque tag such as a digest is neither: the GPU Operator version says nothing about it and an unreadable version is not evidence of an unsupported one, so it does not block. The same floor covers installs with no `ClusterPolicy` at all, where the version comes from the OLM `ClusterServiceVersion` and no operand versions are readable; an install that overrode its operands on top of an older operator is rejected there, since the overrides are invisible — `skipGpuStackVersionChecks` covers it. Distro-suffixed toolkit tags (`v1.20.1-ubuntu20.04`) compare on their release core, since as semver prereleases they would order *below* the floor they meet.
 
 ### Fixed
+- mpsd no longer tries to start the MPS control daemon on a node whose NVIDIA
+  driver is older than r615. The `-p 3` and `-a` flags it passes belong to the
+  MPS v3 interface, and a pre-r615 `nvidia-cuda-mps-control` rejects them with
+  its usage text and exit code 0, which the supervisor retried five times as an
+  unexpected clean exit before the pod went into `CrashLoopBackOff` with the
+  cause buried under the help output. mpsd already reads the driver major via
+  NVML before starting MPS; it now checks it against the same minimum the
+  operator's dependency check uses and exits with a message naming the driver
+  and the minimum. The operator still reports the node as
+  `GPUDriverVersionUnsupported`.
 - The mpsd container's default memory limit is raised from 256Mi to 1Gi. The
   MPS control daemon's memory is mostly driver host allocations charged to the
   pod's cgroup and grows with the number of GPUs on the node, so on a 4-GPU
