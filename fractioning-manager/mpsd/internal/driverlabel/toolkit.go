@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
@@ -20,15 +21,12 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
-// LabelToolkitVersion checks the host installation only when the operator
-// requests it for an externally managed toolkit. mpsd runs with HostPID, so
-// /proc/1/root reaches the host filesystem without an additional host mount.
-func LabelToolkitVersion(ctx context.Context) error {
-	if !env.Bool("CHECK_HOST_TOOLKIT_VERSION", false) {
-		return nil
-	}
+// ValidateHostToolkit checks and labels the installed toolkit before MPS starts.
+// The operator selects its location and whether to bypass validation. HostPID lets
+// /proc/1/root reach the host filesystem without an additional host mount.
+func ValidateHostToolkit(ctx context.Context) error {
 	if env.Bool("SKIP_GPU_STACK_VERSION_CHECKS", false) {
-		slog.Warn("host NVIDIA Container Toolkit validation is disabled by SKIP_GPU_STACK_VERSION_CHECKS")
+		slog.Info("host NVIDIA Container Toolkit validation is skipped", "reason", "SKIP_GPU_STACK_VERSION_CHECKS=true")
 		return nil
 	}
 	nodeName := os.Getenv(envNodeName)
@@ -39,19 +37,29 @@ func LabelToolkitVersion(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return labelToolkitVersion(ctx, client, nodeName, hostToolkitVersion)
+	return validateAndLabelHostToolkit(ctx, client, nodeName)
 }
 
 func hostToolkitVersion(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultRequestTimeout)
 	defer cancel()
-	// chroot uses the host's dynamic loader/libraries as well as its binary.
-	// The first PATH entry covers the GPU Operator's default toolkit install.
-	cmd := exec.CommandContext(ctx, "chroot", "/proc/1/root", "/bin/sh", "-c", "exec nvidia-ctk --version")
-	cmd.Env = []string{"PATH=/usr/local/nvidia/toolkit:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	binary := os.Getenv("HOST_TOOLKIT_BINARY")
+	searchPath := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if binary == "" {
+		// With no ClusterPolicy, allow both package and default operator installs.
+		searchPath += ":/usr/local/nvidia/toolkit"
+		binary = "nvidia-ctk"
+	} else if binary != "nvidia-ctk" && !filepath.IsAbs(binary) {
+		return "", fmt.Errorf("host NVIDIA Container Toolkit binary must be an absolute path: %q", binary)
+	}
+	// chroot resolves the binary and its libraries in the host filesystem.
+	// Pass the selected binary as an argument, without shell interpolation.
+	slog.Info("checking host NVIDIA Container Toolkit", "binary", binary, "searchPath", searchPath)
+	cmd := exec.CommandContext(ctx, "chroot", "/proc/1/root", binary, "--version")
+	cmd.Env = []string{"PATH=" + searchPath}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("read host NVIDIA Container Toolkit version: %w: %s", err, strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("read host NVIDIA Container Toolkit version using %q: %w: %s", binary, err, strings.TrimSpace(string(output)))
 	}
 	return parseToolkitVersion(string(output))
 }
@@ -68,8 +76,8 @@ func parseToolkitVersion(output string) (string, error) {
 	return "", fmt.Errorf("unrecognized host NVIDIA Container Toolkit version output: %q", output)
 }
 
-func labelToolkitVersion(ctx context.Context, client corev1client.NodeInterface, nodeName string, readVersion func(context.Context) (string, error)) error {
-	version, probeErr := readVersion(ctx)
+func validateAndLabelHostToolkit(ctx context.Context, client corev1client.NodeInterface, nodeName string) error {
+	version, probeErr := hostToolkitVersion(ctx)
 	// Clear stale successful detection when the host binary cannot be read.
 	var value any
 	if probeErr == nil {
@@ -90,5 +98,6 @@ func labelToolkitVersion(ctx context.Context, client corev1client.NodeInterface,
 	if semver.Compare("v"+version, toolkitinfo.MinimumVersion) < 0 {
 		return fmt.Errorf("host NVIDIA Container Toolkit %s is below minimum %s", version, toolkitinfo.MinimumVersion)
 	}
+	slog.Info("validated host NVIDIA Container Toolkit", "version", version, "node", nodeName)
 	return nil
 }

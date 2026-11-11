@@ -29,9 +29,9 @@ import (
 const (
 	clusterPolicyVersionLabel = "app.kubernetes.io/version"
 	// minimumGPUOperatorVersion is the floor for the GPU Operator's own version,
-	// used only where the operand versions below cannot be verified directly: no
+	// used where the device-plugin version cannot be verified directly: no
 	// ClusterPolicy, or one that leaves an operand unset. It is the first release
-	// whose defaults satisfy both operands.
+	// whose default satisfies the device-plugin requirement.
 	minimumGPUOperatorVersion   = "v26.7.1"
 	clusterPolicyReadyState     = "ready"
 	clusterPolicyReadyCondition = "Ready"
@@ -54,15 +54,6 @@ type gpuOperandRequirement struct {
 }
 
 var gpuOperandRequirements = []gpuOperandRequirement{
-	{
-		// The container toolkit carries the apply-cuda-memory-limits CDI hook
-		// that applies the NVIDIA_GPU_MEMORY_REQUEST/NVIDIA_GPU_MEMORY_LIMIT
-		// values fractiond injects. On an older toolkit the limits are injected
-		// and nothing acts on them, so GPU memory goes unfenced silently.
-		name:       "container toolkit",
-		specPath:   []string{"spec", "toolkit", "version"},
-		minVersion: toolkitinfo.MinimumVersion,
-	},
 	{
 		name:       "device plugin",
 		specPath:   []string{"spec", "devicePlugin", "version"},
@@ -179,7 +170,8 @@ func (c GpuOperatorDependencyChecker) managementCDINamespaceFailureMessage(clust
 // empty strings when they do, when no version source is present, or when the
 // gates are bypassed.
 //
-// Where a ClusterPolicy exists the pinned operand versions are gated directly:
+// Toolkit versions are checked on each host by mpsd. Where a ClusterPolicy
+// exists, the remaining pinned operand versions are gated directly:
 // they are the dependency gpu-fractioning actually has. The GPU Operator version
 // is deliberately not checked against them — it is wrong in both directions,
 // rejecting an older operator whose operands were overridden onto supported
@@ -297,7 +289,7 @@ func NewGpuDriverDependencyChecker(reader client.Reader, skipToolkitVersionCheck
 	return GpuDriverDependencyChecker{reader: reader, skipToolkitVersionChecks: skipToolkitVersionChecks}
 }
 
-func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, condition corev1.NodeCondition, probeHostToolkit bool) (corev1.NodeCondition, error) {
+func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, condition corev1.NodeCondition) (corev1.NodeCondition, error) {
 	if condition.Status != corev1.ConditionFalse {
 		return condition, nil
 	}
@@ -313,7 +305,7 @@ func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, 
 	if driverReason, driverMessage, found := gpuDriverFailureReason(node); found {
 		condition.Reason = driverReason
 		condition.Message = driverMessage
-	} else if probeHostToolkit && !c.skipToolkitVersionChecks {
+	} else if !c.skipToolkitVersionChecks {
 		if reason, message := gpuToolkitFailureReason(node); reason != "" {
 			condition.Reason = reason
 			condition.Message = message
@@ -431,10 +423,6 @@ func gpuOperatorVersionFailureMessage(rawVersion, source string) string {
 // evidence of an unsupported one, so it is skipped rather than blocked.
 func gpuOperandVersionFailureMessage(clusterPolicy *unstructured.Unstructured) (message string, defaulted []string) {
 	for _, operand := range gpuOperandRequirements {
-		if operand.name == "container toolkit" && toolkitExternallyManaged(clusterPolicy) {
-			// The host probe is authoritative for an externally managed toolkit.
-			continue
-		}
 		rawVersion, _, _ := unstructured.NestedString(clusterPolicy.Object, operand.specPath...)
 		rawVersion = strings.TrimSpace(rawVersion)
 		if rawVersion == "" {
@@ -454,17 +442,6 @@ func gpuOperandVersionFailureMessage(clusterPolicy *unstructured.Unstructured) (
 	}
 
 	return "", defaulted
-}
-
-// toolkitExternallyManaged selects the host probe only for an explicit false.
-// Omitted enabled defaults to true in the GPU Operator API; keep its existing
-// version validation for omitted, absent, or unreadable policy data.
-func toolkitExternallyManaged(policy *unstructured.Unstructured) bool {
-	if policy == nil {
-		return false
-	}
-	enabled, found, err := unstructured.NestedBool(policy.Object, "spec", "toolkit", "enabled")
-	return err == nil && found && !enabled
 }
 
 func gpuToolkitFailureReason(node *corev1.Node) (reason, message string) {

@@ -60,16 +60,14 @@ type ManagedDaemon interface {
 
 // BuildOptions carries the context needed by ManagedDaemon.BuildDaemonSet.
 type BuildOptions struct {
-	ProbeHostToolkit          bool                 // Only probe when ClusterPolicy explicitly sets toolkit.enabled=false.
-	SkipGpuStackVersionChecks bool                 // Helm-injected bypass, including the node-local toolkit probe.
-	Namespace                 string               // namespace for the DaemonSet
-	NodeSelector              map[string]string    // selects which nodes the daemon targets
-	Tolerations               []corev1.Toleration  // taints on the targeted nodes the daemon pods tolerate
-	ServiceAccountName        string               // service account for daemon pods that need API access
-	RuntimeClassName          *string              // resolved RuntimeClass for daemon pods that need NVIDIA GPU/NVML access
-	DefaultImages             map[string]ImageSpec // Helm-injected default images keyed by daemon name
-	FIPSOnly                  bool                 // Helm-injected: run daemon containers with FIPS-only enforcement. See FIPSOnlyEnv.
-	NRIPluginEnabled          bool                 // the GPU Operator delivers GPUs through its own NRI plugin, which deletes the nvidia RuntimeClass. See SetManagementCDIDevice.
+	Namespace          string               // namespace for the DaemonSet
+	NodeSelector       map[string]string    // selects which nodes the daemon targets
+	Tolerations        []corev1.Toleration  // taints on the targeted nodes the daemon pods tolerate
+	ServiceAccountName string               // service account for daemon pods that need API access
+	RuntimeClassName   *string              // resolved RuntimeClass for daemon pods that need NVIDIA GPU/NVML access
+	DefaultImages      map[string]ImageSpec // Helm-injected default images keyed by daemon name
+	FIPSOnly           bool                 // Helm-injected: run daemon containers with FIPS-only enforcement. See FIPSOnlyEnv.
+	NRIPluginEnabled   bool                 // the GPU Operator delivers GPUs through its own NRI plugin, which deletes the nvidia RuntimeClass. See SetManagementCDIDevice.
 }
 
 // ResolveRuntimeClassName returns the RuntimeClass to set on daemon pods that

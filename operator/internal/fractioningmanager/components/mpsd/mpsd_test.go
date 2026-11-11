@@ -57,7 +57,7 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 			opts.RuntimeClassName = tt.runtimeClassName
 			opts.NRIPluginEnabled = tt.nriPluginEnabled
 
-			tmpl := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue).BuildDaemonSet(opts).Spec.Template
+			tmpl := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{}).BuildDaemonSet(opts).Spec.Template
 
 			if tt.expectRuntimeClass == nil {
 				if tmpl.Spec.RuntimeClassName != nil {
@@ -76,7 +76,7 @@ func TestDaemon_BuildDaemonSet_ManagementCDIDevice(t *testing.T) {
 }
 
 func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
-	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue)
+	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{})
 
 	if got := d.Name(); got != "mpsd" {
 		t.Errorf("Name() = %q, want %q", got, "mpsd")
@@ -219,7 +219,7 @@ func TestDaemon_BuildDaemonSet_Basics(t *testing.T) {
 }
 
 func TestDaemon_BuildDaemonSet_AuditLogDisabled(t *testing.T) {
-	ds := NewMpsdDaemon(nil, false, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts())
+	ds := NewMpsdDaemon(nil, false, testSupportSMSharingTrue, ToolkitValidation{}).BuildDaemonSet(defaultOpts())
 	ctr := ds.Spec.Template.Spec.Containers[0]
 
 	if got := envValue(ctr.Env, "MPS_MEMACCT_AUDIT_LOG"); got != "false" {
@@ -228,7 +228,7 @@ func TestDaemon_BuildDaemonSet_AuditLogDisabled(t *testing.T) {
 }
 
 func TestDaemon_BuildDaemonSet_SupportSMSharingDisabled(t *testing.T) {
-	ds := NewMpsdDaemon(nil, testMpsdAuditLogTrue, false).BuildDaemonSet(defaultOpts())
+	ds := NewMpsdDaemon(nil, testMpsdAuditLogTrue, false, ToolkitValidation{}).BuildDaemonSet(defaultOpts())
 	ctr := ds.Spec.Template.Spec.Containers[0]
 
 	if got := envValue(ctr.Env, "MPS_SUPPORT_SM_SHARING"); got != "false" {
@@ -252,7 +252,7 @@ func TestDaemon_BuildDaemonSet_FIPSOnly(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := defaultOpts()
 			opts.FIPSOnly = tt.fipsOnly
-			ctr := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue).
+			ctr := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{}).
 				BuildDaemonSet(opts).Spec.Template.Spec.Containers[0]
 
 			if got := envValue(ctr.Env, "GODEBUG"); got != tt.wantGODEBUG {
@@ -304,7 +304,7 @@ func TestDaemon_BuildDaemonSet_RuntimeClass(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts := defaultOpts()
 			opts.RuntimeClassName = tt.runtimeClassName
-			spec := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue).BuildDaemonSet(opts).Spec.Template.Spec
+			spec := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{}).BuildDaemonSet(opts).Spec.Template.Spec
 			if tt.want == nil {
 				if spec.RuntimeClassName != nil {
 					t.Fatalf("RuntimeClassName = %q, want nil", *spec.RuntimeClassName)
@@ -343,7 +343,7 @@ func TestDaemon_BuildDaemonSet_Args(t *testing.T) {
 		MaxRetries:        ptr.To(int32(5)),
 		StableThreshold:   &metav1.Duration{Duration: 10 * time.Minute},
 		GracefulStopDelay: &metav1.Duration{Duration: 30 * time.Second},
-	}, testMpsdAuditLogTrue, testSupportSMSharingTrue)
+	}, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{})
 
 	ds := d.BuildDaemonSet(defaultOpts())
 	args := ds.Spec.Template.Spec.Containers[0].Args
@@ -370,7 +370,7 @@ func TestDaemon_BuildDaemonSet_TerminationGrace(t *testing.T) {
 	// Default (no configured graceful-stop-delay): mpsd's 60s default + buffer,
 	// and always ≥ the graceful-stop-delay so kubelet can't SIGKILL mpsd before
 	// its MPS graceful-quit window completes (the driver-upgrade guarantee).
-	grace := NewMpsdDaemon(nil, false, testSupportSMSharingTrue).BuildDaemonSet(defaultOpts()).Spec.Template.Spec.TerminationGracePeriodSeconds
+	grace := NewMpsdDaemon(nil, false, testSupportSMSharingTrue, ToolkitValidation{}).BuildDaemonSet(defaultOpts()).Spec.Template.Spec.TerminationGracePeriodSeconds
 	if grace == nil {
 		t.Fatal("terminationGracePeriodSeconds is nil; mpsd inherits the 30s default and can be killed mid-quit")
 	}
@@ -384,7 +384,7 @@ func TestDaemon_BuildDaemonSet_TerminationGrace(t *testing.T) {
 	// A configured graceful-stop-delay is tracked (plus buffer), still ≥ it.
 	d := NewMpsdDaemon(&v1alpha1.MpsDaemonSpec{
 		GracefulStopDelay: &metav1.Duration{Duration: 90 * time.Second},
-	}, false, testSupportSMSharingTrue)
+	}, false, testSupportSMSharingTrue, ToolkitValidation{})
 	grace = d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.TerminationGracePeriodSeconds
 	if want := int64((90*time.Second + terminationGraceBuffer).Seconds()); grace == nil || *grace != want {
 		t.Fatalf("configured grace = %v, want %d", grace, want)
@@ -395,7 +395,7 @@ func TestDaemon_BuildDaemonSet_TerminationGrace(t *testing.T) {
 }
 
 func TestDaemon_BuildDaemonSet_Tolerations(t *testing.T) {
-	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue)
+	d := NewMpsdDaemon(nil, testMpsdAuditLogTrue, testSupportSMSharingTrue, ToolkitValidation{})
 
 	if got := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Tolerations; got != nil {
 		t.Errorf("Tolerations = %v, want nil when none are configured", got)
@@ -426,19 +426,17 @@ func defaultOpts() daemonmgr.BuildOptions {
 	}
 }
 
-func TestDaemon_BuildDaemonSet_ToolkitProbeAndBypass(t *testing.T) {
+func TestDaemon_BuildDaemonSet_ToolkitValidation(t *testing.T) {
 	for _, skip := range []bool{false, true} {
-		for _, probe := range []bool{false, true} {
-			opts := defaultOpts()
-			opts.SkipGpuStackVersionChecks = skip
-			opts.ProbeHostToolkit = probe
-			ds := NewMpsdDaemon(nil, false, true).BuildDaemonSet(opts)
+		for _, binary := range []string{"", "nvidia-ctk", "/opt/nvidia/toolkit/nvidia-ctk"} {
+			toolkit := ToolkitValidation{SkipVersionChecks: skip, Binary: binary}
+			ds := NewMpsdDaemon(nil, false, true, toolkit).BuildDaemonSet(defaultOpts())
 			env := ds.Spec.Template.Spec.Containers[0].Env
 			if got := envValue(env, "SKIP_GPU_STACK_VERSION_CHECKS"); got != strconv.FormatBool(skip) {
-				t.Fatalf("toolkit bypass env = %q, want %t", got, skip)
+				t.Fatalf("host toolkit bypass = %q, want %t", got, skip)
 			}
-			if got := envValue(env, "CHECK_HOST_TOOLKIT_VERSION"); got != strconv.FormatBool(probe) {
-				t.Fatalf("host toolkit probe env = %q, want %t", got, probe)
+			if got := envValue(env, "HOST_TOOLKIT_BINARY"); got != binary {
+				t.Fatalf("host toolkit binary = %q, want %q", got, binary)
 			}
 		}
 	}

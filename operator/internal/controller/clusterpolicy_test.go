@@ -79,6 +79,31 @@ func TestClusterPolicyNRIPluginEnabled(t *testing.T) {
 	}
 }
 
+func TestClusterPolicyToolkitBinary(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		toolkit map[string]any
+		want    string
+	}{
+		{"managed default", map[string]any{"enabled": true}, "/usr/local/nvidia/toolkit/nvidia-ctk"},
+		{"managed custom directory", map[string]any{"enabled": true, "installDir": "/opt/nvidia"}, "/opt/nvidia/toolkit/nvidia-ctk"},
+		{"omitted enabled defaults to managed", map[string]any{"installDir": "/opt/nvidia"}, "/opt/nvidia/toolkit/nvidia-ctk"},
+		{"empty toolkit defaults to managed", map[string]any{}, "/usr/local/nvidia/toolkit/nvidia-ctk"},
+		{"external ignores unused install directory", map[string]any{"enabled": false, "installDir": "/unused"}, "nvidia-ctk"},
+		{"relative directory remains invalid for the host probe", map[string]any{"installDir": "relative"}, "relative/toolkit/nvidia-ctk"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			policy := clusterPolicyWithSpec(map[string]any{"toolkit": tt.toolkit})
+			if got := policy.ToolkitBinary(); got != tt.want {
+				t.Fatalf("ToolkitBinary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if got := (ClusterPolicy{}).ToolkitBinary(); got != "" {
+		t.Fatalf("absent policy must select default discovery, got %q", got)
+	}
+}
+
 func TestClusterPolicyManagementCDIDeviceNamespaces(t *testing.T) {
 	tests := []struct {
 		name     string

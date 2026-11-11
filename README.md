@@ -72,33 +72,12 @@ Use v26.7.1 rather than v26.7.0: on v26.7.1 the bundled device-plugin and contai
 
 ### GPU Operator operand versions
 
-When `ClusterPolicy.spec.toolkit.enabled` is explicitly `false`, mpsd checks
-only the actual host Container Toolkit version at startup, using the host's
-`nvidia-ctk --version` through `chroot /proc/1/root`. The unused ClusterPolicy
-toolkit version is ignored. mpsd publishes
-`gpu-fractioning.kai.scheduler/container-toolkit-version` on the node and refuses
-to start MPS if the version is below v1.20.1 or cannot be detected. The node Ready
-condition reports `GPUContainerToolkitVersionUnsupported`,
-`GPUContainerToolkitVersionMissing`, or `GPUContainerToolkitVersionInvalid`.
+GPU fractioning requires these component versions:
 
-When `toolkit.enabled` is `true` or omitted (the GPU Operator API defaults it to
-`true`), the existing ClusterPolicy toolkit version validation is retained and
-no host toolkit probe is run. Toolkit-specific node diagnostics do not require
-or consult a local version label on that path. An absent or unreadable policy
-does not opt into the probe; existing dependency checks handle it as before.
-
-The probe searches `/usr/local/nvidia/toolkit` and standard host binary
-directories. Restart mpsd after an out-of-band toolkit upgrade to refresh
-its detection. This version check does not replace an end-to-end GPU memory
-enforcement test. The existing `skipGpuStackVersionChecks` escape hatch bypasses
-both toolkit checks; driver validation remains separate.
-
-What GPU fractioning depends on is two GPU Operator operands, not the GPU Operator version that bundles them:
-
-| Operand | Minimum | Why |
-|---------|---------|-----|
-| container toolkit | `v1.20.1` | carries the `apply-cuda-memory-limits` CDI hook that applies the GPU-memory limits fractiond injects |
-| device plugin | `v0.20.1` | required for fractional GPU allocation |
+| Component | Minimum | Purpose |
+|-----------|---------|---------|
+| NVIDIA Container Toolkit | `v1.20.1` | provides the `apply-cuda-memory-limits` CDI hook for GPU memory enforcement |
+| NVIDIA device plugin | `v0.20.1` | supports fractional GPU allocation |
 
 Both are independently overridable, so v26.7.0 works as long as they are overridden along with the driver:
 
@@ -111,22 +90,55 @@ helm install gpu-operator nvidia/gpu-operator \
   --set devicePlugin.version=v0.20.1
 ```
 
-The operator reads both from the `ClusterPolicy` (`spec.toolkit.version` and `spec.devicePlugin.version`) and reports an operand below its minimum on the `Ready` condition as `GPUOperandVersionUnsupported`, without rolling out the node-level daemons. How an operand is recorded decides what can be checked:
+mpsd checks the installed Container Toolkit version on each GPU node at startup,
+before starting MPS. The binary location depends on how the toolkit is installed:
 
-| `spec.<operand>.version` | Effective version | Checked against |
-|--------------------------|-------------------|-----------------|
-| a version tag (`v1.20.1-ubuntu20.04`) | that tag | the operand minimum, directly |
-| unset | the GPU Operator's own build default | the GPU Operator floor, **v26.7.1** |
-| an opaque tag such as a digest | that image | nothing — not checked |
+| Installation | Configuration | Host binary location |
+|--------------|---------------|----------------------|
+| GPU Operator managed | `ClusterPolicy.spec.toolkit.enabled=true` (default) | `<spec.toolkit.installDir>/toolkit/nvidia-ctk`; the default install directory is `/usr/local/nvidia` |
+| Installed on the host | `ClusterPolicy.spec.toolkit.enabled=false` | `nvidia-ctk` on standard host binary paths, including `/usr/local/bin` and `/usr/bin` |
+| No ClusterPolicy | No installation directory available | Standard host binary paths, followed by `/usr/local/nvidia/toolkit` |
 
-An unset operand is not unchecked: leaving it out means the GPU Operator supplies its build's default, so its own version is what determines the operand, and the floor is the first release whose defaults satisfy both. That inference is only valid because nothing pinned the operand — which is exactly why it is *not* applied to one that is pinned. A digest is neither: it names an image the GPU Operator version says nothing about, and an unreadable version is not evidence of an unsupported one, so it does not block.
+The managed installation directory must be an absolute path. Host detection uses
+`chroot` with mpsd's privileged and host PID access.
 
-The same floor applies where there is no `ClusterPolicy` at all and the version comes from the OLM `ClusterServiceVersion` instead — an OpenShift install, typically — for the same reason: no operand versions are readable there, so defaults are all that can be inferred. An install that overrode its operands onto supported versions on top of an older operator is rejected on that path, since the overrides are invisible. Use `skipGpuStackVersionChecks` if that is your situation.
-
-If these checks read your install wrongly, `--set skipGpuStackVersionChecks=true` bypasses all of them. It turns verification off rather than making an unsupported stack work: with the gates off, a GPU stack that cannot enforce GPU memory limits rolls the daemons out anyway, `Ready` goes True, and GPU memory goes unfenced with nothing reported. Confirm the operand versions yourself before setting it:
+The detected version is published on each node. Inspect it with:
 
 ```sh
-kubectl get clusterpolicy -o jsonpath='{.items[0].spec.toolkit.version}{"\n"}{.items[0].spec.devicePlugin.version}{"\n"}'
+kubectl get nodes -L gpu-fractioning.kai.scheduler/container-toolkit-version
+```
+
+mpsd does not start MPS when the toolkit version is unsupported, cannot be
+detected, or cannot be published. Check mpsd logs and the node Ready condition
+for `GPUContainerToolkitVersionUnsupported`, `GPUContainerToolkitVersionMissing`,
+or `GPUContainerToolkitVersionInvalid`.
+
+After upgrading or downgrading the toolkit, restart mpsd on the affected nodes to
+refresh the version check. If multiple toolkit installations are present, ensure
+the selected binary belongs to the installation used by the container runtime.
+Verify GPU memory enforcement with a workload after setup.
+
+The device-plugin version is checked using
+`ClusterPolicy.spec.devicePlugin.version`. An unsupported version is reported
+as `GPUOperandVersionUnsupported` on the `GpuFractioningConfig` Ready condition.
+
+| `spec.devicePlugin.version` | Validation |
+|----------------------------|------------|
+| Version tag, such as `v0.20.1` | Compared with the device-plugin minimum |
+| Omitted | GPU Operator must be **v26.7.1** or newer to supply a supported default |
+| Opaque tag or image digest | Version cannot be determined from the tag; verify the image's version yourself |
+
+For installations without ClusterPolicy, the operator checks the GPU Operator
+version from the OLM ClusterServiceVersion when available.
+
+Set `skipGpuStackVersionChecks=true` to bypass toolkit and other GPU stack
+version checks. Driver version checks remain active. Use this option only after
+confirming that the installed components meet the requirements; disabling checks
+does not enable memory enforcement on an unsupported stack. To inspect versions:
+
+```sh
+nvidia-ctk --version  # run on each GPU node
+kubectl get clusterpolicy -o jsonpath='{.items[0].spec.devicePlugin.version}{"\n"}'
 ```
 
 If a GPU node ends up on an older driver, the `GpuFractioningConfig` `Ready` condition reports it (`GPUDriverVersionUnsupported`) and the node-level daemons are not rolled out there.

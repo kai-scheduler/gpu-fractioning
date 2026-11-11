@@ -5,9 +5,10 @@ package driverlabel
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,31 +36,40 @@ func TestParseToolkitVersion(t *testing.T) {
 	}
 }
 
-func TestHostToolkitVersionUsesHostRoot(t *testing.T) {
+// fakeChroot lets the tests exercise the real probe without root, Linux, or GPUs.
+func fakeChroot(t *testing.T, script string) {
+	t.Helper()
 	dir := t.TempDir()
-	// A fake chroot verifies the host root and fixed command without requiring
-	// root, Linux, a GPU, or an installed toolkit on the development machine.
-	script := `#!/bin/sh
-[ "$1" = /proc/1/root ] && [ "$2" = /bin/sh ] && [ "$3" = -c ] && [ "$4" = 'exec nvidia-ctk --version' ] || exit 1
-[ "$PATH" = /usr/local/nvidia/toolkit:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ] || exit 2
-echo 'NVIDIA Container Toolkit CLI version 1.20.1'
-`
-	if err := os.WriteFile(filepath.Join(dir, "chroot"), []byte(script), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "chroot"), []byte("#!/bin/sh\n"+script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	got, err := hostToolkitVersion(context.Background())
-	if err != nil || got != "1.20.1" {
-		t.Fatalf("hostToolkitVersion() = %q, %v", got, err)
+}
+
+func TestHostToolkitVersionUsesSelectedHostBinary(t *testing.T) {
+	const systemPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	for _, tt := range []struct{ name, configured, binary, searchPath string }{
+		{"external", "nvidia-ctk", "nvidia-ctk", systemPath},
+		{"managed", "/usr/local/nvidia/toolkit/nvidia-ctk", "/usr/local/nvidia/toolkit/nvidia-ctk", systemPath},
+		{"custom managed path", "/opt/nvidia tools/toolkit/nvidia-ctk", "/opt/nvidia tools/toolkit/nvidia-ctk", systemPath},
+		{"no policy", "", "nvidia-ctk", systemPath + ":/usr/local/nvidia/toolkit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOST_TOOLKIT_BINARY", tt.configured)
+			fakeChroot(t, fmt.Sprintf(`[ "$#" = 3 ] && [ "$1" = /proc/1/root ] && [ "$2" = %q ] && [ "$3" = --version ] || exit 1
+[ "$PATH" = %q ] || exit 2
+printf 'NVIDIA Container Toolkit CLI version 1.20.1\n'
+`, tt.binary, tt.searchPath))
+			got, err := hostToolkitVersion(context.Background())
+			if err != nil || got != "1.20.1" {
+				t.Fatalf("hostToolkitVersion() = %q, %v", got, err)
+			}
+		})
 	}
 }
 
 func TestHostToolkitVersionHonorsCancellation(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "chroot"), []byte("#!/bin/sh\nexec /bin/sleep 30\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir)
+	fakeChroot(t, "exec /bin/sleep 30\n")
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	if _, err := hostToolkitVersion(ctx); err == nil {
@@ -70,58 +80,79 @@ func TestHostToolkitVersionHonorsCancellation(t *testing.T) {
 	}
 }
 
-func TestLabelToolkitVersionBypass(t *testing.T) {
-	t.Setenv("CHECK_HOST_TOOLKIT_VERSION", "true")
-	t.Setenv("SKIP_GPU_STACK_VERSION_CHECKS", "true")
-	t.Setenv(envNodeName, "")
-	// An explicit bypass must not require a Kubernetes client or host binaries.
-	if err := LabelToolkitVersion(context.Background()); err != nil {
-		t.Fatalf("bypassed toolkit validation returned %v", err)
+func TestHostToolkitVersionRejectsRelativeBinary(t *testing.T) {
+	t.Setenv("HOST_TOOLKIT_BINARY", "relative/toolkit/nvidia-ctk")
+	fakeChroot(t, "exit 0\n")
+	if _, err := hostToolkitVersion(context.Background()); err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("expected a path validation error, got %v", err)
 	}
 }
 
-func TestLabelToolkitVersion(t *testing.T) {
+func TestHostToolkitVersionDoesNotFallbackFromManagedPath(t *testing.T) {
+	t.Setenv("HOST_TOOLKIT_BINARY", "/missing/toolkit/nvidia-ctk")
+	fakeChroot(t, `[ "$2" = /missing/toolkit/nvidia-ctk ] && exit 127
+printf 'NVIDIA Container Toolkit CLI version 1.20.1\n'
+`)
+	if _, err := hostToolkitVersion(context.Background()); err == nil || !strings.Contains(err.Error(), "/missing/toolkit/nvidia-ctk") {
+		t.Fatalf("expected an error for the selected managed binary, got %v", err)
+	}
+}
+
+func TestValidateAndLabelHostToolkit(t *testing.T) {
 	for _, tt := range []struct {
 		name, version string
-		probeErr      error
+		exitCode      int
 		wantErr       bool
+		wantLabel     string
 	}{
-		{name: "supported", version: "1.20.1"},
-		{name: "newer", version: "1.21.0"},
-		{name: "unsupported is published before refusing startup", version: "1.19.1", wantErr: true},
-		{name: "prerelease below minimum", version: "1.20.1-rc.1", wantErr: true},
-		{name: "failed probe clears stale label", probeErr: errors.New("host binary missing"), wantErr: true},
+		{name: "supported", version: "1.20.1", wantLabel: "1.20.1"},
+		{name: "newer", version: "1.21.0", wantLabel: "1.21.0"},
+		{name: "unsupported is published before refusing startup", version: "1.19.1", wantErr: true, wantLabel: "1.19.1"},
+		{name: "prerelease below minimum", version: "1.20.1-rc.1", wantErr: true, wantLabel: "1.20.1-rc.1"},
+		{name: "failed probe clears stale label", exitCode: 127, wantErr: true},
+		{name: "invalid output clears stale label", version: "invalid", wantErr: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			fakeChroot(t, fmt.Sprintf("printf 'NVIDIA Container Toolkit CLI version %%s\\n' %q\nexit %d\n", tt.version, tt.exitCode))
 			ctx := context.Background()
 			client := fake.NewSimpleClientset(&corev1.Node{ObjectMeta: metav1.ObjectMeta{
 				Name: "node-a", Labels: map[string]string{toolkitinfo.VersionLabel: "1.21.0", "keep": "value"},
 			}}).CoreV1().Nodes()
-			err := labelToolkitVersion(ctx, client, "node-a", func(context.Context) (string, error) {
-				return tt.version, tt.probeErr
-			})
+			err := validateAndLabelHostToolkit(ctx, client, "node-a")
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("labelToolkitVersion() error = %v, wantErr = %t", err, tt.wantErr)
+				t.Fatalf("validateAndLabelHostToolkit() error = %v, wantErr = %t", err, tt.wantErr)
 			}
 			node, err := client.Get(ctx, "node-a", metav1.GetOptions{})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if node.Labels[toolkitinfo.VersionLabel] != tt.version || node.Labels["keep"] != "value" {
+			if node.Labels[toolkitinfo.VersionLabel] != tt.wantLabel || node.Labels["keep"] != "value" {
 				t.Fatalf("unexpected labels: %v", node.Labels)
+			}
+			if tt.wantLabel == "" {
+				if _, present := node.Labels[toolkitinfo.VersionLabel]; present {
+					t.Fatal("stale label was not removed")
+				}
 			}
 		})
 	}
 }
 
-func TestLabelToolkitVersionProbeSelection(t *testing.T) {
+func TestValidateAndLabelHostToolkitRequiresLabelPublication(t *testing.T) {
+	fakeChroot(t, "printf 'NVIDIA Container Toolkit CLI version 1.20.1\\n'\n")
+	client := fake.NewSimpleClientset().CoreV1().Nodes()
+	if err := validateAndLabelHostToolkit(context.Background(), client, "missing-node"); err == nil || !strings.Contains(err.Error(), "patch node") {
+		t.Fatalf("label publication failure must prevent startup, got %v", err)
+	}
+}
+
+func TestValidateHostToolkitBypass(t *testing.T) {
 	for _, value := range []string{"", "false", "true"} {
 		t.Run(value, func(t *testing.T) {
-			t.Setenv("CHECK_HOST_TOOLKIT_VERSION", value)
-			t.Setenv("SKIP_GPU_STACK_VERSION_CHECKS", "false")
+			t.Setenv("SKIP_GPU_STACK_VERSION_CHECKS", value)
 			t.Setenv(envNodeName, "")
-			err := LabelToolkitVersion(context.Background())
-			if value == "true" {
+			err := ValidateHostToolkit(context.Background())
+			if value != "true" {
 				if err == nil || err.Error() != "NODE_NAME is required" {
 					t.Fatalf("enabled probe should require NODE_NAME, got %v", err)
 				}

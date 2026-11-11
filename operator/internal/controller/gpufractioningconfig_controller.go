@@ -148,10 +148,13 @@ func NewGpuFractioningConfigReconciler(
 
 // buildDaemons constructs the managed daemons from the current CRD spec,
 // so each reconcile sees the latest configuration.
-func buildDaemons(spec *v1alpha1.GpuFractioningConfigSpec, mpsdAuditLog, supportSMSharing bool) []daemonmgr.ManagedDaemon {
+func (r *GpuFractioningConfigReconciler) buildDaemons(spec *v1alpha1.GpuFractioningConfigSpec, clusterPolicy ClusterPolicy) []daemonmgr.ManagedDaemon {
 	return []daemonmgr.ManagedDaemon{
-		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, supportSMSharing),
-		mpsd.NewMpsdDaemon(spec.MpsDaemon, mpsdAuditLog, supportSMSharing),
+		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, r.SupportSMSharing),
+		mpsd.NewMpsdDaemon(spec.MpsDaemon, r.MpsdAuditLog, r.SupportSMSharing, mpsd.ToolkitValidation{
+			SkipVersionChecks: r.SkipGpuStackVersionChecks,
+			Binary:            clusterPolicy.ToolkitBinary(),
+		}),
 	}
 }
 
@@ -192,7 +195,7 @@ func (r *GpuFractioningConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// Reconcile each managed daemon and collect health + conditions.
 	var needsRequeue bool
-	daemons := buildDaemons(&config.Spec, r.MpsdAuditLog, r.SupportSMSharing)
+	daemons := r.buildDaemons(&config.Spec, clusterPolicy)
 
 	opts := r.buildOptions(ctx, &config, clusterPolicy)
 	for _, daemon := range daemons {
@@ -240,7 +243,7 @@ func (r *GpuFractioningConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	// when something is unhealthy or when transitioning back to healthy
 	// (to flip nodes from False→True). In steady state this is skipped entirely.
 	if needsRequeue || wasUnhealthy {
-		nodesUnhealthy, err := r.patchNodeConditions(ctx, r.Namespace, opts.ProbeHostToolkit)
+		nodesUnhealthy, err := r.patchNodeConditions(ctx, r.Namespace)
 		if err != nil {
 			// In case it that prev state was unhealthy, but we failed to patch nodes, we want to requeue
 			log.Error(err, "failed to patch node conditions, will requeue")
@@ -321,15 +324,13 @@ func (r *GpuFractioningConfigReconciler) evaluateDriverUpgrade(ctx context.Conte
 // workload's assigned GPU as a CDI device.
 func (r *GpuFractioningConfigReconciler) buildOptions(ctx context.Context, config *v1alpha1.GpuFractioningConfig, clusterPolicy ClusterPolicy) daemonmgr.BuildOptions {
 	opts := daemonmgr.BuildOptions{
-		Namespace:                 r.Namespace,
-		NodeSelector:              config.Spec.NodeSelector,
-		Tolerations:               config.Spec.Tolerations,
-		ServiceAccountName:        r.DaemonServiceAccountName,
-		RuntimeClassName:          daemonmgr.ResolveRuntimeClassName(config.Spec.RuntimeClassName),
-		DefaultImages:             r.DefaultImages,
-		FIPSOnly:                  r.FIPSOnly,
-		SkipGpuStackVersionChecks: r.SkipGpuStackVersionChecks,
-		ProbeHostToolkit:          clusterPolicy.Err == nil && toolkitExternallyManaged(clusterPolicy.Policy),
+		Namespace:          r.Namespace,
+		NodeSelector:       config.Spec.NodeSelector,
+		Tolerations:        config.Spec.Tolerations,
+		ServiceAccountName: r.DaemonServiceAccountName,
+		RuntimeClassName:   daemonmgr.ResolveRuntimeClassName(config.Spec.RuntimeClassName),
+		DefaultImages:      r.DefaultImages,
+		FIPSOnly:           r.FIPSOnly,
 	}
 
 	if clusterPolicy.NRIPluginEnabled() {
@@ -455,7 +456,7 @@ func removeDriverMajorLabelPatch() ([]byte, error) {
 // (the "unhealthy" set); in steady state this set is empty. If a node was
 // already patched True and a later pod reveals it unhealthy, the condition is
 // overwritten to False — correctness over patch count.
-func (r *GpuFractioningConfigReconciler) patchNodeConditions(ctx context.Context, namespace string, probeHostToolkit bool) (bool, error) {
+func (r *GpuFractioningConfigReconciler) patchNodeConditions(ctx context.Context, namespace string) (bool, error) {
 	log := logf.FromContext(ctx)
 
 	managedByLabels := map[string]string{
@@ -507,7 +508,7 @@ func (r *GpuFractioningConfigReconciler) patchNodeConditions(ctx context.Context
 			}
 
 			condition := nodeConditionForPod(ready, pod)
-			condition, err := r.GpuDriverChecker.Check(ctx, pod.Spec.NodeName, condition, probeHostToolkit)
+			condition, err := r.GpuDriverChecker.Check(ctx, pod.Spec.NodeName, condition)
 			if err != nil {
 				log.Error(err, "failed to check GPU driver dependency", "node", pod.Spec.NodeName)
 				errs = append(errs, err)
