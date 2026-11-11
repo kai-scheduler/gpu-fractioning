@@ -12,6 +12,7 @@ import (
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal/driverlabel"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
 )
 
 func main() {
@@ -53,8 +54,16 @@ func main() {
 
 	// Record the driver version mpsd sees locally through NVML on this pod
 	// before starting MPS, so operator dependency diagnostics can read it.
-	if err := driverlabel.RecordDriverMajor(ctx, logger); err != nil {
+	driverMajor, err := driverlabel.RecordDriverMajor(ctx, logger)
+	if err != nil {
 		logger.Error("record NVIDIA driver major version on the pod", "error", err)
+		os.Exit(1)
+	}
+	// A pre-r615 nvidia-cuda-mps-control rejects -p 3 and -a with its usage text
+	// and exit code 0, which the supervisor would retry as an unexpected clean
+	// exit. Say why instead and leave the pod to the operator's driver check.
+	if err := driverinfo.CheckSupportedMajor(driverMajor); err != nil {
+		logger.Error("not starting the MPS control daemon on this node", "error", err, "driverMajor", driverMajor)
 		os.Exit(1)
 	}
 

@@ -64,6 +64,8 @@ helm install gpu-operator nvidia/gpu-operator \
 
 The mpsd pod on each GPU node records the node-local NVIDIA driver major version at startup as an annotation on itself (`gpu-fractioning.kai.scheduler/nvidia-driver-version.major`) and the dependency check requires major **>= 615**, so any `r615` release satisfies it.
 
+On a node whose driver is older than r615, mpsd logs that the driver is below the minimum and exits before starting the MPS control daemon, instead of letting a pre-r615 `nvidia-cuda-mps-control` reject the MPS v3 flags. The pod still restarts, so on a mixed cluster the `GpuFractioningConfig` reports `MpsdReady=False` with the `GPUDriverVersionUnsupported` reason for that node until its driver is upgraded or the node is left out of `spec.nodeSelector`.
+
 Driver-version diagnostics intentionally use this gpu-fractioning-owned annotation rather than the GPU Operator node label `nvidia.com/cuda.driver-version.major`. The GPU Operator label can be missing, stale, or unavailable when the NVIDIA driver is installed by another mechanism, such as managed cloud images or custom node images. Reading the actual node-local driver version through NVML keeps the reported reason tied to the driver state that the node daemons run against.
 
 The annotation is written by mpsd during startup, and it lives on the pod rather than on the node so the daemon ServiceAccount, which is mounted into privileged host-PID pods, needs only a namespaced `patch` on `pods` and no cluster-wide grant on `nodes`. NVIDIA GPU Operator driver upgrades drain and reschedule the mpsd pod, so the record is refreshed after those supported upgrades. If you change the driver out of band without recreating the pod, delete the mpsd pod on that node so startup reruns and refreshes it. Releases up to 0.1.8 wrote the same key as a node label; the operator still removes that label when the `GpuFractioningConfig` is deleted.
@@ -287,7 +289,7 @@ A single cluster-scoped CR configures the whole stack. Field docs are authoritat
 | `spec.runtimeClassName` | RuntimeClass for daemon pods that need NVIDIA GPU/NVML access. Defaults to `nvidia`; set `""` to use the node default runtime. |
 | `spec.fractioningAgent` | fractiond options (annotation prefix, log level, fail-open, retroactive enforcement). |
 | `spec.metricsAgent` | metricsd options (`enabled`, metric-name overrides, extra NVML volumes/mounts). |
-| `spec.mpsDaemon` | mpsd supervisor options (e.g. `gracefulStopDelay`). |
+| `spec.mpsDaemon` | mpsd supervisor options (e.g. `gracefulStopDelay`) and `resources`, which overrides the mpsd container's requests and limits key by key (defaults: 50m CPU, 64Mi memory and 100Mi ephemeral-storage requested, 1Gi memory limit). The MPS control daemon's memory grows with the number of GPUs on the node; set it from the chart's `mpsd.resources`. |
 
 Status is surfaced as conditions on the CR:
 - **`FractiondReady`** / **`MpsdReady`** — per-daemon rollout health (ready vs desired nodes).

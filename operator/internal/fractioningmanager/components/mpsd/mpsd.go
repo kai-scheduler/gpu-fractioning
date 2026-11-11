@@ -33,10 +33,14 @@ const (
 	envCapabilities   = "NVIDIA_DRIVER_CAPABILITIES"
 
 	// Resource requests/limits for the mpsd container. See daemonmgr.DaemonResources
-	// for the requests-plus-memory-limit rationale.
+	// for the requests-plus-memory-limit rationale. The MPS control daemon's
+	// memory is mostly driver host allocations charged to the pod's cgroup, and
+	// it grows with the number of GPUs: a 4-GPU host hit a 256Mi limit at
+	// startup with the processes' own RSS under 70Mi. spec.mpsDaemon.resources
+	// overrides these per cluster.
 	mpsdCPURequest = "50m"
 	mpsdMemRequest = "64Mi"
-	mpsdMemLimit   = "256Mi"
+	mpsdMemLimit   = "1Gi"
 
 	// defaultGracefulStopDelay mirrors mpsd's supervisor.DefaultGracefulStopDelay
 	// (60s). It lives in a separate module, so it is duplicated here — keep in
@@ -63,6 +67,16 @@ func NewMpsdDaemon(spec *v1alpha1.MpsDaemonSpec, auditLog, supportSMSharing bool
 }
 
 func (d *daemon) Name() string { return daemonName }
+
+// resources returns the container resources: the defaults with any requests and
+// limits from spec.mpsDaemon.resources applied on top.
+func (d *daemon) resources() corev1.ResourceRequirements {
+	defaults := daemonmgr.DaemonResources(mpsdCPURequest, mpsdMemRequest, mpsdMemLimit)
+	if d.spec == nil {
+		return defaults
+	}
+	return daemonmgr.MergeResources(defaults, d.spec.Resources)
+}
 
 // BuildDaemonSet constructs the desired DaemonSet for mpsd.
 // The pod runs privileged with the configured runtime class so it can read the
@@ -183,7 +197,7 @@ func (d *daemon) buildContainer(image daemonmgr.ImageSpec) (corev1.Container, []
 		Args:            d.buildArgs(),
 		ReadinessProbe:  mpsControlSocketProbe,
 		LivenessProbe:   mpsLivenessProbe,
-		Resources:       daemonmgr.DaemonResources(mpsdCPURequest, mpsdMemRequest, mpsdMemLimit),
+		Resources:       d.resources(),
 		VolumeMounts: []corev1.VolumeMount{
 			{
 				Name:      volumeMPSPipe,

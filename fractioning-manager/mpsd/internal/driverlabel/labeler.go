@@ -33,8 +33,10 @@ const (
 )
 
 // RecordDriverMajor reads the local NVIDIA driver version via NVML and
-// annotates the current pod with the parsed driver major branch.
-func RecordDriverMajor(ctx context.Context, logger *slog.Logger) error {
+// annotates the current pod with the parsed driver major branch. It returns the
+// major it found so the caller can refuse to start MPS on a branch that does
+// not support the flags mpsd uses.
+func RecordDriverMajor(ctx context.Context, logger *slog.Logger) (int, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -42,28 +44,28 @@ func RecordDriverMajor(ctx context.Context, logger *slog.Logger) error {
 	podName := os.Getenv(envPodName)
 	podNamespace := os.Getenv(envPodNamespace)
 	if podName == "" || podNamespace == "" {
-		return fmt.Errorf("%s and %s are required", envPodName, envPodNamespace)
+		return 0, fmt.Errorf("%s and %s are required", envPodName, envPodNamespace)
 	}
 
 	driverVersion, err := driverVersionFromNVML(logger)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	major, err := driverinfo.ParseDriverVersionMajor(driverVersion)
 	if err != nil {
-		return fmt.Errorf("parse NVIDIA driver version %q: %w", driverVersion, err)
+		return 0, fmt.Errorf("parse NVIDIA driver version %q: %w", driverVersion, err)
 	}
 
 	if err := patchPodDriverMajor(ctx, podNamespace, podName, major); err != nil {
-		return err
+		return 0, err
 	}
 
 	logger.Info("recorded NVIDIA driver major version on the pod",
 		"driverVersion", driverVersion,
 		"driverMajor", major,
 	)
-	return nil
+	return major, nil
 }
 
 func driverVersionFromNVML(logger *slog.Logger) (string, error) {

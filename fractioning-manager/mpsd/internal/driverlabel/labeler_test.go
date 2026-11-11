@@ -69,7 +69,7 @@ func TestRecordDriverMajorRequiresPodIdentity(t *testing.T) {
 			for key, value := range env {
 				t.Setenv(key, value)
 			}
-			err := RecordDriverMajor(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			_, err := RecordDriverMajor(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 			if err == nil {
 				t.Fatal("RecordDriverMajor() error = nil, expected error")
 			}
