@@ -50,11 +50,12 @@ const (
 // event is a pending mapping change. The callback is executed on the worker
 // goroutine, keeping the producer's NRI hot path non-blocking.
 type event struct {
-	kind         kind
-	adapt        adapter     // upsert
-	syncAdapt    syncAdapter // replace
-	containerID  string      // remove
-	runtimeEmpty bool        // replace: the runtime snapshot had no containers at all; skip Replace
+	kind          kind
+	adapt         adapter     // upsert
+	syncAdapt     syncAdapter // replace
+	containerID   string      // remove
+	fromReconnect bool        // replace: came from an NRI Synchronize (reconnect)
+	runtimeEmpty  bool        // replace: the runtime snapshot had no containers at all
 }
 
 // Options configures a Processor.
@@ -116,10 +117,10 @@ func (p *Processor) Delete(containerID string) {
 // rather than blocking the NRI callback.
 //
 // runtimeEmpty reports whether the runtime's snapshot had no containers at all,
-// before adapt drops the ones that carry no fractional GPU. In that case the
-// Replace is skipped: an empty snapshot indicates containerd restarted and has
-// not yet replayed existing containers (observed in k3s/k3d). Pruning would wipe
-// all mapping files and cause a metric gap for every running workload; skipping
+// before adapt drops the ones that carry no fractional GPU. On a reconnect with
+// an empty snapshot the Replace is skipped: containerd restarted and has not yet
+// replayed existing containers (observed in k3s/k3d). Pruning would wipe all
+// mapping files and cause a metric gap for every running workload; skipping
 // preserves attribution across the reconnect window. A subsequent non-empty
 // Synchronize, or individual Upsert/Delete events, will reconcile the directory.
 //
@@ -127,7 +128,7 @@ func (p *Processor) Delete(containerID string) {
 // not a replay gap: mappings recorded for containers that disappeared while the
 // plugin was down must be pruned, or the metrics sidecar keeps reporting them.
 func (p *Processor) Synchronize(adapt func() []store.ContainerInfo, runtimeEmpty bool) {
-	p.enqueue(item{event: event{kind: replace, syncAdapt: adapt, runtimeEmpty: runtimeEmpty}})
+	p.enqueue(item{event: event{kind: replace, syncAdapt: adapt, fromReconnect: true, runtimeEmpty: runtimeEmpty}})
 }
 
 // enqueue sends an item to the worker without blocking. If the queue is full the
@@ -188,7 +189,7 @@ func (p *Processor) apply(ev event) {
 		}
 	case replace:
 		infos := ev.syncAdapt()
-		if ev.runtimeEmpty && len(infos) == 0 {
+		if ev.fromReconnect && ev.runtimeEmpty {
 			p.log.Debug("NRI Synchronize: skipping empty reconnect sync to preserve existing mapping files")
 			return
 		}
