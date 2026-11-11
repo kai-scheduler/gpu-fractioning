@@ -11,6 +11,7 @@ release:
 templates:
   - daemon-role.yaml
   - daemon-rolebinding.yaml
+  - daemon-pod-policy.yaml
 tests:
   - it: grants the daemons pod patch in the release namespace only
     template: daemon-role.yaml
@@ -64,3 +65,62 @@ tests:
       - equal:
           path: subjects[0].name
           value: custom-daemon
+
+  - it: pins the daemon ServiceAccount to its own pod with an admission policy where the API exists
+    template: daemon-pod-policy.yaml
+    capabilities:
+      apiVersions:
+        - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+    asserts:
+      - hasDocuments:
+          count: 2
+      - containsDocument:
+          kind: ValidatingAdmissionPolicy
+          apiVersion: admissionregistration.k8s.io/v1
+          name: gpu-fractioning-daemon-pod-patch
+        documentIndex: 0
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: "request.userInfo.username == 'system:serviceaccount:gpu-fractioning:gpu-fractioning-daemon'"
+        documentIndex: 0
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].operations
+          value: ["UPDATE"]
+        documentIndex: 0
+      - containsDocument:
+          kind: ValidatingAdmissionPolicyBinding
+          apiVersion: admissionregistration.k8s.io/v1
+          name: gpu-fractioning-daemon-pod-patch
+        documentIndex: 1
+      - equal:
+          path: spec.matchResources.namespaceSelector.matchLabels
+          value:
+            kubernetes.io/metadata.name: gpu-fractioning
+        documentIndex: 1
+
+  - it: renders no admission policy where the API does not exist
+    template: daemon-pod-policy.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the admission policy when forced on
+    template: daemon-pod-policy.yaml
+    set:
+      daemonAdmissionPolicy:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: renders no admission policy when forced off
+    template: daemon-pod-policy.yaml
+    set:
+      daemonAdmissionPolicy:
+        enabled: false
+    capabilities:
+      apiVersions:
+        - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+    asserts:
+      - hasDocuments:
+          count: 0

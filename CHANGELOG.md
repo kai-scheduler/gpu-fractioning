@@ -130,7 +130,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   node, used to hold a cluster-wide `patch` on `nodes` for that one write, which
   let any of those pods relabel, taint or cordon any node in the cluster. The
   chart now grants it a `patch` on `pods` in the release namespace only; the
-  daemon `ClusterRole` and `ClusterRoleBinding` are removed on upgrade. The
+  daemon `ClusterRole` and `ClusterRoleBinding` are removed on upgrade, and on
+  Kubernetes 1.30 and newer a `ValidatingAdmissionPolicy` (`daemonAdmissionPolicy.enabled`,
+  `auto` by default) limits that ServiceAccount to the pod its own token was
+  issued for and to that one annotation. The
   key (`gpu-fractioning.kai.scheduler/nvidia-driver-version.major`) and the
   `GPUDriverVersion*` reasons on the `Ready` condition are unchanged, and the
   operator still clears the old node label when the `GpuFractioningConfig` is

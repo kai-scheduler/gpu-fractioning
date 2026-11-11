@@ -298,6 +298,9 @@ type GpuDriverDependencyChecker struct {
 	namespace string
 }
 
+// podNodeNameField is the pod field selector the API server serves natively.
+const podNodeNameField = "spec.nodeName"
+
 func NewGpuDriverDependencyChecker(reader client.Reader, namespace string) GpuDriverDependencyChecker {
 	return GpuDriverDependencyChecker{reader: reader, namespace: namespace}
 }
@@ -327,8 +330,8 @@ func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, 
 }
 
 // mpsdPodOnNode returns the mpsd pod scheduled on nodeName, or nil when there
-// is none. The list is filtered by the daemon labels and narrowed in memory:
-// one mpsd pod per GPU node, read only for nodes already reported unhealthy.
+// is none. The reader is the uncached API client, so the node name goes to the
+// API server as a field selector and only that node's daemon pod comes back.
 func (c GpuDriverDependencyChecker) mpsdPodOnNode(ctx context.Context, nodeName string) (*corev1.Pod, error) {
 	pods := &corev1.PodList{}
 	if err := c.reader.List(ctx, pods,
@@ -337,6 +340,7 @@ func (c GpuDriverDependencyChecker) mpsdPodOnNode(ctx context.Context, nodeName 
 			daemonmgr.LabelManagedBy: daemonmgr.ManagedByValue,
 			daemonmgr.LabelComponent: mpsd.DaemonName,
 		},
+		client.MatchingFields{podNodeNameField: nodeName},
 	); err != nil {
 		return nil, err
 	}

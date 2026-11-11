@@ -741,7 +741,14 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 			if !tt.missingPod {
 				objects = append(objects, mpsdPodObject("mpsd-a", "node-a", tt.annotations))
 			}
-			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build(), testCheckerNamespace)
+			// The fake client needs an index to serve the spec.nodeName field selector
+			// the real API server supports natively.
+			reader := fake.NewClientBuilder().
+				WithIndex(&corev1.Pod{}, podNodeNameField, func(o client.Object) []string {
+					return []string{o.(*corev1.Pod).Spec.NodeName}
+				}).
+				WithObjects(objects...).Build()
+			checker := NewGpuDriverDependencyChecker(reader, testCheckerNamespace)
 
 			got, err := checker.Check(context.Background(), "node-a", corev1.NodeCondition{
 				Type:    corev1.NodeConditionType(daemonmgr.NodeConditionType),
