@@ -1,0 +1,26 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# mpsd.resources reaches the mpsd DaemonSet only through the default CR, which
+# the operator reads and merges over its own defaults.
+suite: mpsd resources
+templates:
+  - default-cr.yaml
+tests:
+  - it: leaves mpsDaemon unset by default so the operator defaults apply
+    asserts:
+      - notExists:
+          path: spec.mpsDaemon
+
+  - it: passes the configured resources through to spec.mpsDaemon.resources
+    set:
+      mpsd:
+        resources:
+          limits:
+            memory: 2Gi
+    asserts:
+      - equal:
+          path: spec.mpsDaemon.resources
+          value:
+            limits:
+              memory: 2Gi

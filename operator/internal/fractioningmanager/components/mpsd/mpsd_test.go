@@ -8,6 +8,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
@@ -390,6 +391,32 @@ func TestDaemon_BuildDaemonSet_TerminationGrace(t *testing.T) {
 	}
 	if *grace <= 90 {
 		t.Errorf("grace %d must exceed the configured 90s graceful-stop-delay", *grace)
+	}
+}
+
+func TestDaemon_BuildDaemonSet_ResourcesOverride(t *testing.T) {
+	d := NewMpsdDaemon(&v1alpha1.MpsDaemonSpec{
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+		},
+	}, testMpsdAuditLogTrue, testSupportSMSharingTrue)
+	ctr := d.BuildDaemonSet(defaultOpts()).Spec.Template.Spec.Containers[0]
+
+	if got := ctr.Resources.Limits.Memory().String(); got != "2Gi" {
+		t.Errorf("memory limit = %q, want 2Gi", got)
+	}
+	// Only the key set in the spec changes; the default requests stay.
+	if got := ctr.Resources.Requests.Cpu().String(); got != mpsdCPURequest {
+		t.Errorf("CPU request = %q, want %q", got, mpsdCPURequest)
+	}
+	if got := ctr.Resources.Requests.Memory().String(); got != mpsdMemRequest {
+		t.Errorf("memory request = %q, want %q", got, mpsdMemRequest)
+	}
+	if ctr.Resources.Requests.StorageEphemeral().IsZero() {
+		t.Error("ephemeral-storage request was dropped")
+	}
+	if !ctr.Resources.Limits.Cpu().IsZero() {
+		t.Errorf("unexpected CPU limit %q", ctr.Resources.Limits.Cpu().String())
 	}
 }
 
