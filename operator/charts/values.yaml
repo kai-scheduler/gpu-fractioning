@@ -129,6 +129,12 @@ mpsd:
   # server that containers opt into via the gpu-compute.mode: sm-sharing
   # annotation.
   auditLog: true
+  # resources overrides the mpsd container's requests and limits key by key on
+  # the generated CR (spec.mpsDaemon.resources). Unset keys keep the operator's
+  # defaults: 50m CPU, 64Mi memory and 100Mi ephemeral-storage requested, a 1Gi
+  # memory limit and no CPU limit. The MPS control daemon's memory grows with
+  # the number of GPUs on the node, so raise limits.memory on large hosts.
+  resources: {}
 
 # fractioningAgent configures the fractiond DaemonSet on the generated CR.
 fractioningAgent:

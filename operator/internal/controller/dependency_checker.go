@@ -40,8 +40,9 @@ const (
 	gpuOperatorProviderSubstring = "NVIDIA"
 
 	// minGPUDriverMajor is the minimum NVIDIA driver major version that supports
-	// the MPS memory and compute limit behavior gpu-fractioning depends on.
-	minGPUDriverMajor = 615
+	// the MPS memory and compute limit behavior gpu-fractioning depends on; mpsd
+	// refuses to start below it, so the two gates always agree.
+	minGPUDriverMajor = driverinfo.MinimumSupportedMajor
 )
 
 // gpuOperandRequirement is a GPU Operator operand whose version
