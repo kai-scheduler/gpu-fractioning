@@ -18,14 +18,14 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-func TestPatchNodeDriverMajor(t *testing.T) {
-	clientset := fake.NewSimpleClientset(&corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-a"},
+func TestPatchPodDriverMajor(t *testing.T) {
+	clientset := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "mpsd-abc", Namespace: "gpu-fractioning"},
 	})
 
-	err := patchNodeDriverMajorWithClient(context.Background(), clientset.CoreV1().Nodes(), "node-a", 615)
+	err := patchPodDriverMajorWithClient(context.Background(), clientset.CoreV1().Pods("gpu-fractioning"), "mpsd-abc", 615)
 	if err != nil {
-		t.Fatalf("PatchNodeDriverMajor() error = %v", err)
+		t.Fatalf("patchPodDriverMajor() error = %v", err)
 	}
 
 	actions := clientset.Actions()
@@ -39,11 +39,11 @@ func TestPatchNodeDriverMajor(t *testing.T) {
 	if action.GetPatchType() != types.MergePatchType {
 		t.Fatalf("patch type = %q, expected %q", action.GetPatchType(), types.MergePatchType)
 	}
-	if action.GetResource().Resource != "nodes" {
-		t.Fatalf("resource = %q, expected nodes", action.GetResource().Resource)
+	if action.GetResource().Resource != "pods" {
+		t.Fatalf("resource = %q, expected pods", action.GetResource().Resource)
 	}
-	if action.GetName() != "node-a" {
-		t.Fatalf("node name = %q, expected node-a", action.GetName())
+	if action.GetNamespace() != "gpu-fractioning" || action.GetName() != "mpsd-abc" {
+		t.Fatalf("target = %s/%s, expected gpu-fractioning/mpsd-abc", action.GetNamespace(), action.GetName())
 	}
 
 	var gotBody map[string]any
@@ -51,22 +51,34 @@ func TestPatchNodeDriverMajor(t *testing.T) {
 		t.Fatalf("decode patch body: %v", err)
 	}
 	metadata := gotBody["metadata"].(map[string]any)
-	labels := metadata["labels"].(map[string]any)
-	if got := labels[driverinfo.NVIDIADriverMajorLabel]; got != "615" {
-		t.Fatalf("driver label = %v, expected 615", got)
+	if _, found := metadata["labels"]; found {
+		t.Fatalf("patch touches labels: %v", metadata)
+	}
+	annotations := metadata["annotations"].(map[string]any)
+	if got := annotations[driverinfo.NVIDIADriverMajorAnnotation]; got != "615" {
+		t.Fatalf("driver annotation = %v, expected 615", got)
 	}
 }
 
-func TestLabelCurrentNodeRequiresNodeName(t *testing.T) {
-	t.Setenv(envNodeName, "")
-	_, err := LabelCurrentNode(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if err == nil {
-		t.Fatal("LabelCurrentNode() error = nil, expected error")
+func TestRecordDriverMajorRequiresPodIdentity(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"no name":      {envPodName: "", envPodNamespace: "gpu-fractioning"},
+		"no namespace": {envPodName: "mpsd-abc", envPodNamespace: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for key, value := range env {
+				t.Setenv(key, value)
+			}
+			_, err := RecordDriverMajor(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err == nil {
+				t.Fatal("RecordDriverMajor() error = nil, expected error")
+			}
+		})
 	}
 }
 
-func TestDriverMajorLabelPatchRejectsInvalidMajor(t *testing.T) {
-	if _, err := driverMajorLabelPatch(0); err == nil {
-		t.Fatal("driverMajorLabelPatch(0) error = nil, expected error")
+func TestDriverMajorAnnotationPatchRejectsInvalidMajor(t *testing.T) {
+	if _, err := driverMajorAnnotationPatch(0); err == nil {
+		t.Fatal("driverMajorAnnotationPatch(0) error = nil, expected error")
 	}
 }

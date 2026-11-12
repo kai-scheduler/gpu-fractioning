@@ -11,9 +11,16 @@ import (
 )
 
 const (
-	// NVIDIADriverMajorLabel is written by the mpsd DaemonSet after reading the
-	// node-local driver version via NVML during startup.
-	NVIDIADriverMajorLabel = "gpu-fractioning.kai.scheduler/nvidia-driver-version.major"
+	// NVIDIADriverMajorAnnotation is written by mpsd on its own pod after reading
+	// the node-local driver version via NVML during startup. The operator reads
+	// it from the mpsd pod of a node to explain a daemon that cannot start.
+	NVIDIADriverMajorAnnotation = "gpu-fractioning.kai.scheduler/nvidia-driver-version.major"
+
+	// NVIDIADriverMajorLabel is the same key as a node label, which releases up
+	// to 0.1.8 had mpsd write with a cluster-wide nodes/patch grant. It is no
+	// longer written; the operator still removes it on GpuFractioningConfig
+	// deletion so upgraded clusters end up clean.
+	NVIDIADriverMajorLabel = NVIDIADriverMajorAnnotation
 
 	// MinimumSupportedMajor is the oldest NVIDIA driver major branch that ships
 	// the MPS v3 control protocol (-p 3) and memacct (-a) that mpsd starts the

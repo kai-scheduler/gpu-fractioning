@@ -1,0 +1,60 @@
+{{/*
+Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}}
+{{- if eq (include "gpu-fractioning.renderDaemonAdmissionPolicy" .) "true" }}
+{{- $key := "gpu-fractioning.kai.scheduler/nvidia-driver-version.major" }}
+# The daemon ServiceAccount's only write is the driver-version annotation mpsd
+# puts on its own pod. RBAC cannot say "own pod", so this policy pins the
+# ServiceAccount's pod updates to the pod its bound token was issued for and to
+# that one annotation.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "gpu-fractioning.fullname" . }}-daemon-pod-patch
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods"]
+  matchConditions:
+    - name: daemon-service-account
+      expression: "request.userInfo.username == 'system:serviceaccount:{{ .Release.Namespace }}:{{ include "gpu-fractioning.daemonServiceAccountName" . }}'"
+  variables:
+    - name: key
+      expression: "'{{ $key }}'"
+    - name: oldAnnotations
+      expression: "has(oldObject.metadata.annotations) ? oldObject.metadata.annotations : {}"
+    - name: newAnnotations
+      expression: "has(object.metadata.annotations) ? object.metadata.annotations : {}"
+    - name: oldLabels
+      expression: "has(oldObject.metadata.labels) ? oldObject.metadata.labels : {}"
+    - name: newLabels
+      expression: "has(object.metadata.labels) ? object.metadata.labels : {}"
+  validations:
+    - expression: "has(request.userInfo.extra) && 'authentication.kubernetes.io/pod-name' in request.userInfo.extra && request.userInfo.extra['authentication.kubernetes.io/pod-name'][0] == object.metadata.name"
+      message: "the gpu-fractioning daemon ServiceAccount may only update the pod its token was issued for"
+    - expression: "variables.newAnnotations.filter(k, k != variables.key).all(k, k in variables.oldAnnotations && variables.oldAnnotations[k] == variables.newAnnotations[k]) && variables.oldAnnotations.filter(k, k != variables.key).all(k, k in variables.newAnnotations)"
+      message: "the gpu-fractioning daemon ServiceAccount may only change the {{ $key }} annotation"
+    - expression: "variables.newLabels == variables.oldLabels && (has(object.metadata.finalizers) ? object.metadata.finalizers : []) == (has(oldObject.metadata.finalizers) ? oldObject.metadata.finalizers : []) && (has(object.metadata.ownerReferences) ? object.metadata.ownerReferences : []) == (has(oldObject.metadata.ownerReferences) ? oldObject.metadata.ownerReferences : [])"
+      message: "the gpu-fractioning daemon ServiceAccount may not change pod labels, finalizers or owner references"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "gpu-fractioning.fullname" . }}-daemon-pod-patch
+  labels:
+    {{- include "gpu-fractioning.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "gpu-fractioning.fullname" . }}-daemon-pod-patch
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

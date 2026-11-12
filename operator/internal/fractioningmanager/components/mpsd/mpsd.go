@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	daemonName = "mpsd"
+	// DaemonName is the component label value of the mpsd DaemonSet and its pods.
+	DaemonName = "mpsd"
+	daemonName = DaemonName
 
 	defaultMPSPipeDir = "/run/nvidia-mps"
 	defaultMPSLogDir  = "/var/log/nvidia-mps"
@@ -25,6 +27,8 @@ const (
 	volumeMPSLog  = "mps-log"
 
 	envNodeName       = "NODE_NAME"
+	envPodName        = "POD_NAME"
+	envPodNamespace   = "POD_NAMESPACE"
 	envVisibleDevices = "NVIDIA_VISIBLE_DEVICES"
 	envCapabilities   = "NVIDIA_DRIVER_CAPABILITIES"
 
@@ -75,9 +79,9 @@ func (d *daemon) resources() corev1.ResourceRequirements {
 }
 
 // BuildDaemonSet constructs the desired DaemonSet for mpsd.
-// The pod runs privileged with the configured runtime class so it can label the
-// node with the local NVIDIA driver major version via NVML, then start the
-// nvidia-cuda-mps-control binary.
+// The pod runs privileged with the configured runtime class so it can read the
+// local NVIDIA driver major version via NVML, record it on its own pod, then
+// start the nvidia-cuda-mps-control binary.
 // Two host paths are mounted:
 //   - The MPS pipe directory, shared with fractiond and GPU workload containers.
 //   - The MPS log directory, for nvidia-cuda-mps-control daemon logs.
@@ -113,6 +117,19 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 			Name: envNodeName,
 			ValueFrom: &corev1.EnvVarSource{
 				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+			},
+		},
+		// mpsd annotates its own pod with the driver major it reads via NVML.
+		corev1.EnvVar{
+			Name: envPodName,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			},
+		},
+		corev1.EnvVar{
+			Name: envPodNamespace,
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 			},
 		},
 		corev1.EnvVar{Name: envVisibleDevices, Value: "all"},

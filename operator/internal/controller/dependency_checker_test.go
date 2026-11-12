@@ -22,6 +22,7 @@ import (
 
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
 )
 
@@ -683,24 +684,24 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 	tests := []struct {
 		name           string
 		status         corev1.ConditionStatus
-		labels         map[string]string
-		missingNode    bool
+		annotations    map[string]string
+		missingPod     bool
 		initialReason  string
 		expectedStatus corev1.ConditionStatus
 		expectedReason string
 	}{
 		{
-			name:           "ready condition is not changed even with missing driver label",
+			name:           "ready condition is not changed even with missing driver annotation",
 			status:         corev1.ConditionTrue,
-			labels:         nil,
+			annotations:    nil,
 			initialReason:  daemonmgr.ReasonAllDaemonsReady,
 			expectedStatus: corev1.ConditionTrue,
 			expectedReason: daemonmgr.ReasonAllDaemonsReady,
 		},
 		{
-			name:           "not ready condition is enriched when driver label is missing",
+			name:           "not ready condition is enriched when driver annotation is missing",
 			status:         corev1.ConditionFalse,
-			labels:         nil,
+			annotations:    nil,
 			initialReason:  "CrashLoopBackOff",
 			expectedStatus: corev1.ConditionFalse,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionMissing,
@@ -708,7 +709,7 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 		{
 			name:           "not ready condition is enriched when driver version is too old",
 			status:         corev1.ConditionFalse,
-			labels:         map[string]string{driverinfo.NVIDIADriverMajorLabel: "614"},
+			annotations:    map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "614"},
 			initialReason:  "CrashLoopBackOff",
 			expectedStatus: corev1.ConditionFalse,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionUnsupported,
@@ -716,31 +717,38 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 		{
 			name:           "not ready condition keeps pod failure when driver version is supported",
 			status:         corev1.ConditionFalse,
-			labels:         map[string]string{driverinfo.NVIDIADriverMajorLabel: "615"},
+			annotations:    map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "615"},
 			initialReason:  "CrashLoopBackOff",
 			expectedStatus: corev1.ConditionFalse,
 			expectedReason: "CrashLoopBackOff",
 		},
 		{
-			name:           "not ready condition keeps pod failure when node cannot be read",
+			// No mpsd pod on the node yet: nothing recorded, reported as missing.
+			name:           "not ready condition reports a missing driver version when the node has no mpsd pod",
 			status:         corev1.ConditionFalse,
-			missingNode:    true,
+			missingPod:     true,
 			initialReason:  "CrashLoopBackOff",
 			expectedStatus: corev1.ConditionFalse,
-			expectedReason: "CrashLoopBackOff",
+			expectedReason: daemonmgr.ReasonGPUDriverVersionMissing,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			objects := []client.Object{}
-			if !tt.missingNode {
-				objects = append(objects, &corev1.Node{ObjectMeta: metav1.ObjectMeta{
-					Name:   "node-a",
-					Labels: tt.labels,
-				}})
+			// A supported mpsd pod on another node must never explain node-a.
+			objects := []client.Object{mpsdPodObject("mpsd-other", "node-b",
+				map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "620"})}
+			if !tt.missingPod {
+				objects = append(objects, mpsdPodObject("mpsd-a", "node-a", tt.annotations))
 			}
-			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build())
+			// The fake client needs an index to serve the spec.nodeName field selector
+			// the real API server supports natively.
+			reader := fake.NewClientBuilder().
+				WithIndex(&corev1.Pod{}, podNodeNameField, func(o client.Object) []string {
+					return []string{o.(*corev1.Pod).Spec.NodeName}
+				}).
+				WithObjects(objects...).Build()
+			checker := NewGpuDriverDependencyChecker(reader, testCheckerNamespace)
 
 			got, err := checker.Check(context.Background(), "node-a", corev1.NodeCondition{
 				Type:    corev1.NodeConditionType(daemonmgr.NodeConditionType),
@@ -764,40 +772,40 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 func TestGpuDriverFailureReason(t *testing.T) {
 	tests := []struct {
 		name           string
-		labels         map[string]string
+		annotations    map[string]string
 		expectedFound  bool
 		expectedReason string
 	}{
 		{
-			name:           "missing label",
+			name:           "missing annotation",
 			expectedFound:  true,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionMissing,
 		},
 		{
-			name:           "invalid label",
-			labels:         map[string]string{driverinfo.NVIDIADriverMajorLabel: "615.34"},
+			name:           "invalid annotation",
+			annotations:    map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "615.34"},
 			expectedFound:  true,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionInvalid,
 		},
 		{
 			name:           "too old",
-			labels:         map[string]string{driverinfo.NVIDIADriverMajorLabel: "614"},
+			annotations:    map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "614"},
 			expectedFound:  true,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionUnsupported,
 		},
 		{
 			name:          "minimum supported",
-			labels:        map[string]string{driverinfo.NVIDIADriverMajorLabel: "615"},
+			annotations:   map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "615"},
 			expectedFound: false,
 		},
 		{
 			name:          "newer supported",
-			labels:        map[string]string{driverinfo.NVIDIADriverMajorLabel: "620"},
+			annotations:   map[string]string{driverinfo.NVIDIADriverMajorAnnotation: "620"},
 			expectedFound: false,
 		},
 		{
-			name:           "GPU Operator label is ignored",
-			labels:         map[string]string{"nvidia.com/cuda.driver-version.major": "615"},
+			name:           "GPU Operator label key is ignored",
+			annotations:    map[string]string{"nvidia.com/cuda.driver-version.major": "615"},
 			expectedFound:  true,
 			expectedReason: daemonmgr.ReasonGPUDriverVersionMissing,
 		},
@@ -805,8 +813,7 @@ func TestGpuDriverFailureReason(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels}}
-			gotReason, _, gotFound := gpuDriverFailureReason(node)
+			gotReason, _, gotFound := gpuDriverFailureReason(tt.annotations)
 			if gotFound != tt.expectedFound {
 				t.Fatalf("found = %t, expected %t", gotFound, tt.expectedFound)
 			}
@@ -908,6 +915,23 @@ func newDependencyScheme() *runtime.Scheme {
 	scheme.AddKnownTypeWithName(clusterServiceVersionGVK, &unstructured.Unstructured{})
 	scheme.AddKnownTypeWithName(clusterServiceVersionGVK.GroupVersion().WithKind(clusterServiceVersionGVK.Kind+"List"), &unstructured.UnstructuredList{})
 	return scheme
+}
+
+// mpsdPodObject is an mpsd DaemonSet pod on node with the given annotations,
+// carrying the labels the checker lists by.
+func mpsdPodObject(name, node string, annotations map[string]string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: testCheckerNamespace,
+			Labels: map[string]string{
+				daemonmgr.LabelManagedBy: daemonmgr.ManagedByValue,
+				daemonmgr.LabelComponent: mpsd.DaemonName,
+			},
+			Annotations: annotations,
+		},
+		Spec: corev1.PodSpec{NodeName: node},
+	}
 }
 
 func clusterPolicyObject(labels map[string]string, status map[string]any) *unstructured.Unstructured {

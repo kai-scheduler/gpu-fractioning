@@ -52,11 +52,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	// Label the node before starting MPS so operator dependency diagnostics use
-	// the driver version mpsd sees locally through NVML.
-	driverMajor, err := driverlabel.LabelCurrentNode(ctx, logger)
+	// Record the driver version mpsd sees locally through NVML on this pod
+	// before starting MPS, so operator dependency diagnostics can read it.
+	driverMajor, err := driverlabel.RecordDriverMajor(ctx, logger)
 	if err != nil {
-		logger.Error("label node with NVIDIA driver major version", "error", err)
+		logger.Error("record NVIDIA driver major version on the pod", "error", err)
 		os.Exit(1)
 	}
 	// A pre-r615 nvidia-cuda-mps-control rejects -p 3 and -a with its usage text

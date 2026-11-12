@@ -141,7 +141,7 @@ func NewGpuFractioningConfigReconciler(
 		FIPSOnly:                  fipsOnly,
 		SkipGpuStackVersionChecks: skipGpuStackVersionChecks,
 		GpuOperatorChecker:        NewGpuOperatorDependencyChecker(apiReader, skipGpuStackVersionChecks, namespace),
-		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader),
+		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader, namespace),
 	}
 }
 
@@ -374,6 +374,9 @@ func (r *GpuFractioningConfigReconciler) reconcileDelete(ctx context.Context, co
 	return ctrl.Result{}, nil
 }
 
+// removeDriverMajorLabels clears the node label that mpsd wrote in releases up
+// to 0.1.8, so a cluster upgraded from one of them ends up clean on deletion.
+// Current mpsd records the driver major on its own pod instead.
 func (r *GpuFractioningConfigReconciler) removeDriverMajorLabels(ctx context.Context, nodeSelector map[string]string) error {
 	log := logf.FromContext(ctx)
 

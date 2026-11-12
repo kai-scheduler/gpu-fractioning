@@ -17,11 +17,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
+	"github.com/kai-scheduler/gpu-fractioning/operator/internal/fractioningmanager/components/mpsd"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
 )
 
@@ -286,15 +286,23 @@ func versionDiscoveryErrorMessage(err error) string {
 	return fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err)
 }
 
-// GpuDriverDependencyChecker checks the gpu-fractioning-owned NVIDIA driver
-// label on a node. It is used only to refine already-unhealthy node conditions
-// with a clearer reason.
+// GpuDriverDependencyChecker checks the NVIDIA driver major version that mpsd
+// recorded on its own pod for a node. It is used only to refine
+// already-unhealthy node conditions with a clearer reason, so the pod is read
+// through the uncached reader on that path alone.
 type GpuDriverDependencyChecker struct {
 	reader client.Reader
+
+	// namespace is where the mpsd pods run; the daemons are namespaced, the
+	// nodes they explain are not.
+	namespace string
 }
 
-func NewGpuDriverDependencyChecker(reader client.Reader) GpuDriverDependencyChecker {
-	return GpuDriverDependencyChecker{reader: reader}
+// podNodeNameField is the pod field selector the API server serves natively.
+const podNodeNameField = "spec.nodeName"
+
+func NewGpuDriverDependencyChecker(reader client.Reader, namespace string) GpuDriverDependencyChecker {
+	return GpuDriverDependencyChecker{reader: reader, namespace: namespace}
 }
 
 func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, condition corev1.NodeCondition) (corev1.NodeCondition, error) {
@@ -302,19 +310,46 @@ func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, 
 		return condition, nil
 	}
 
-	node := &corev1.Node{}
-	if err := c.reader.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+	pod, err := c.mpsdPodOnNode(ctx, nodeName)
+	if err != nil {
 		if ctx.Err() != nil {
 			return condition, err
 		}
 		return condition, nil
 	}
 
-	if driverReason, driverMessage, found := gpuDriverFailureReason(node); found {
+	var annotations map[string]string
+	if pod != nil {
+		annotations = pod.Annotations
+	}
+	if driverReason, driverMessage, found := gpuDriverFailureReason(annotations); found {
 		condition.Reason = driverReason
 		condition.Message = driverMessage
 	}
 	return condition, nil
+}
+
+// mpsdPodOnNode returns the mpsd pod scheduled on nodeName, or nil when there
+// is none. The reader is the uncached API client, so the node name goes to the
+// API server as a field selector and only that node's daemon pod comes back.
+func (c GpuDriverDependencyChecker) mpsdPodOnNode(ctx context.Context, nodeName string) (*corev1.Pod, error) {
+	pods := &corev1.PodList{}
+	if err := c.reader.List(ctx, pods,
+		client.InNamespace(c.namespace),
+		client.MatchingLabels{
+			daemonmgr.LabelManagedBy: daemonmgr.ManagedByValue,
+			daemonmgr.LabelComponent: mpsd.DaemonName,
+		},
+		client.MatchingFields{podNodeNameField: nodeName},
+	); err != nil {
+		return nil, err
+	}
+	for i := range pods.Items {
+		if pods.Items[i].Spec.NodeName == nodeName {
+			return &pods.Items[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (c GpuOperatorDependencyChecker) clusterServiceVersionGPUOperatorVersion(ctx context.Context) (version string, found bool, err error) {
@@ -447,22 +482,25 @@ func gpuOperandVersionFailureMessage(clusterPolicy *unstructured.Unstructured) (
 	return "", defaulted
 }
 
-func gpuDriverFailureReason(node *corev1.Node) (reason, message string, found bool) {
-	// Use the gpu-fractioning-owned label written by mpsd during startup,
-	// not nvidia.com/cuda.driver-version.major. The GPU Operator label can be
-	// missing, stale, or absent entirely when the driver is installed by a managed
-	// cloud image or other non-GPU-Operator mechanism.
-	rawMajor := strings.TrimSpace(node.Labels[driverinfo.NVIDIADriverMajorLabel])
+// gpuDriverFailureReason explains a daemon that cannot start from the driver
+// major mpsd recorded on its pod. annotations are the mpsd pod's; nil when the
+// node has no mpsd pod yet.
+func gpuDriverFailureReason(annotations map[string]string) (reason, message string, found bool) {
+	// Use the gpu-fractioning-owned annotation written by mpsd during startup,
+	// not the node label nvidia.com/cuda.driver-version.major. The GPU Operator
+	// label can be missing, stale, or absent entirely when the driver is
+	// installed by a managed cloud image or other non-GPU-Operator mechanism.
+	rawMajor := strings.TrimSpace(annotations[driverinfo.NVIDIADriverMajorAnnotation])
 	if rawMajor == "" {
 		return daemonmgr.ReasonGPUDriverVersionMissing,
-			fmt.Sprintf("NVIDIA driver major version label %q is missing; minimum supported major version is %d", driverinfo.NVIDIADriverMajorLabel, minGPUDriverMajor),
+			fmt.Sprintf("NVIDIA driver major version annotation %q is missing from the mpsd pod; minimum supported major version is %d", driverinfo.NVIDIADriverMajorAnnotation, minGPUDriverMajor),
 			true
 	}
 
 	major, err := driverinfo.ParseDriverMajorLabel(rawMajor)
 	if err != nil {
 		return daemonmgr.ReasonGPUDriverVersionInvalid,
-			fmt.Sprintf("NVIDIA driver major version %q from label %q is invalid; minimum supported major version is %d", rawMajor, driverinfo.NVIDIADriverMajorLabel, minGPUDriverMajor),
+			fmt.Sprintf("NVIDIA driver major version %q from mpsd pod annotation %q is invalid; minimum supported major version is %d", rawMajor, driverinfo.NVIDIADriverMajorAnnotation, minGPUDriverMajor),
 			true
 	}
 
