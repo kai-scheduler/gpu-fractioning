@@ -29,13 +29,13 @@ COMPONENTS
 ==============================================================================
 
 cel.dev/expr
-    Version:      v0.25.2
+    Version:      v0.25.3
     Source:       https://github.com/google/cel-spec
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/NVIDIA/go-nvml
-    Version:      v0.13.3-1
+    Version:      v0.13.4-1
     Source:       https://github.com/NVIDIA/go-nvml
     Linked into:  metricsd, mpsd
     License:      LICENSE [text cfc7749b96f6]
@@ -77,7 +77,7 @@ github.com/containerd/log
     License:      LICENSE [text 4bbe3b885e8c]
 
 github.com/containerd/nri
-    Version:      v0.12.1
+    Version:      v0.12.5
     Source:       https://github.com/containerd/nri
     Linked into:  fractiond
     License:      LICENSE [text c71d239df917]
@@ -293,31 +293,31 @@ github.com/pmezard/go-difflib
     License:      LICENSE [text 2eb550be6801]
 
 github.com/prometheus/client_golang
-    Version:      v1.24.1
+    Version:      v1.25.0
     Source:       https://github.com/prometheus/client_golang
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 8548bfb2bc19]
 
 github.com/prometheus/client_model
-    Version:      v0.6.2
+    Version:      v0.6.3
     Source:       https://github.com/prometheus/client_model
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 6c79faa15168]
 
 github.com/prometheus/common
-    Version:      v0.70.1
+    Version:      v0.72.0
     Source:       https://github.com/prometheus/common
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 600244c8052c]
 
 github.com/prometheus/procfs
-    Version:      v0.21.1
+    Version:      v0.22.0
     Source:       https://github.com/prometheus/procfs
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 497fcdb9fae5]
 
 github.com/sirupsen/logrus
-    Version:      v1.9.3
+    Version:      v1.9.4
     Source:       https://github.com/sirupsen/logrus
     Linked into:  fractiond
     License:      LICENSE [text 51a0c9ec7f8b]
@@ -431,9 +431,9 @@ golang.org/x/exp
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/mod
-    Version:      v0.41.0
+    Version:      v0.42.0
     Source:       https://cs.opensource.google/go/x/mod
-    Linked into:  fractiond, operator
+    Linked into:  operator
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/net
@@ -443,7 +443,7 @@ golang.org/x/net
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/oauth2
-    Version:      v0.36.0
+    Version:      v0.37.0
     Source:       https://cs.opensource.google/go/x/oauth2
     Linked into:  mpsd, operator
     License:      LICENSE [text 911f8f578293]
@@ -497,7 +497,7 @@ google.golang.org/genproto/googleapis/rpc
     License:      LICENSE [text cfc7749b96f6]
 
 google.golang.org/grpc
-    Version:      v1.83.2
+    Version:      v1.85.0
     Source:       https://github.com/grpc/grpc-go
     Linked into:  fractiond, operator
     License:      LICENSE [text cfc7749b96f6], NOTICE.txt [text 693ff28ec216]
@@ -631,8 +631,8 @@ Each distinct license text is reproduced once and referenced above by its
 
 ------------------------------------------------------------------------------
 text cfc7749b96f6 — applies to:
-    cel.dev/expr@v0.25.2 (LICENSE)
-    github.com/NVIDIA/go-nvml@v0.13.3-1 (LICENSE)
+    cel.dev/expr@v0.25.3 (LICENSE)
+    github.com/NVIDIA/go-nvml@v0.13.4-1 (LICENSE)
     github.com/go-openapi/jsonreference@v1.0.0 (LICENSE)
     github.com/go-openapi/swag/cmdutils@v0.28.0 (LICENSE)
     github.com/go-openapi/swag/conv@v0.28.0 (LICENSE)
@@ -648,7 +648,7 @@ text cfc7749b96f6 — applies to:
     github.com/go-openapi/swag@v0.28.0 (LICENSE)
     google.golang.org/genproto/googleapis/api@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
     google.golang.org/genproto/googleapis/rpc@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
-    google.golang.org/grpc@v1.83.2 (LICENSE)
+    google.golang.org/grpc@v1.85.0 (LICENSE)
     k8s.io/api@v0.36.3 (LICENSE)
     k8s.io/apiextensions-apiserver@v0.36.0 (LICENSE)
     k8s.io/apimachinery@v0.36.3 (LICENSE)
@@ -865,16 +865,16 @@ text cfc7749b96f6 — applies to:
 
 ------------------------------------------------------------------------------
 text c71d239df917 — applies to:
-    github.com/containerd/nri@v0.12.1 (LICENSE)
+    github.com/containerd/nri@v0.12.5 (LICENSE)
     github.com/containerd/ttrpc@v1.2.7 (LICENSE)
     github.com/go-logr/stdr@v1.2.2 (LICENSE)
     github.com/go-openapi/jsonpointer@v1.0.0 (LICENSE)
     github.com/modern-go/concurrent@v0.0.0-20180306012644-bacd9c7ef1dd (LICENSE)
     github.com/modern-go/reflect2@v1.0.3-0.20250322232337-35a7c28c31ee (LICENSE)
-    github.com/prometheus/client_golang@v1.24.1 (LICENSE)
-    github.com/prometheus/client_model@v0.6.2 (LICENSE)
-    github.com/prometheus/common@v0.70.1 (LICENSE)
-    github.com/prometheus/procfs@v0.21.1 (LICENSE)
+    github.com/prometheus/client_golang@v1.25.0 (LICENSE)
+    github.com/prometheus/client_model@v0.6.3 (LICENSE)
+    github.com/prometheus/common@v0.72.0 (LICENSE)
+    github.com/prometheus/procfs@v0.22.0 (LICENSE)
     go.opentelemetry.io/auto/sdk@v1.2.1 (LICENSE)
     go.opentelemetry.io/proto/otlp@v1.11.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -1084,9 +1084,9 @@ text c71d239df917 — applies to:
 ------------------------------------------------------------------------------
 text 911f8f578293 — applies to:
     golang.org/x/exp@v0.0.0-20251219203646-944ab1f22d93 (LICENSE)
-    golang.org/x/mod@v0.41.0 (LICENSE)
+    golang.org/x/mod@v0.42.0 (LICENSE)
     golang.org/x/net@v0.60.0 (LICENSE)
-    golang.org/x/oauth2@v0.36.0 (LICENSE)
+    golang.org/x/oauth2@v0.37.0 (LICENSE)
     golang.org/x/sync@v0.23.0 (LICENSE)
     golang.org/x/sys@v0.48.0 (LICENSE)
     golang.org/x/term@v0.46.0 (LICENSE)
@@ -1942,7 +1942,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 497fcdb9fae5 — applies to:
-    github.com/prometheus/procfs@v0.21.1 (NOTICE)
+    github.com/prometheus/procfs@v0.22.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 procfs provides functions to retrieve system, kernel and process
@@ -2391,7 +2391,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 51a0c9ec7f8b — applies to:
-    github.com/sirupsen/logrus@v1.9.3 (LICENSE)
+    github.com/sirupsen/logrus@v1.9.4 (LICENSE)
 ------------------------------------------------------------------------------
 
 The MIT License (MIT)
@@ -2936,7 +2936,7 @@ text 5e3400b93bbb — applies to:
 
 ------------------------------------------------------------------------------
 text 600244c8052c — applies to:
-    github.com/prometheus/common@v0.70.1 (NOTICE)
+    github.com/prometheus/common@v0.72.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 Common libraries shared by Prometheus Go components.
@@ -2981,7 +2981,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 693ff28ec216 — applies to:
-    google.golang.org/grpc@v1.83.2 (NOTICE.txt)
+    google.golang.org/grpc@v1.85.0 (NOTICE.txt)
 ------------------------------------------------------------------------------
 
 Copyright 2014 gRPC authors.
@@ -3030,7 +3030,7 @@ Submitted on behalf of a third-party: @disconnect3d (Disconnect3d)
 
 ------------------------------------------------------------------------------
 text 6c79faa15168 — applies to:
-    github.com/prometheus/client_model@v0.6.2 (NOTICE)
+    github.com/prometheus/client_model@v0.6.3 (NOTICE)
 ------------------------------------------------------------------------------
 
 Data model artifacts for Prometheus.
@@ -3290,7 +3290,7 @@ Copyright (c) 2016 Felix Geisendörfer (felix@debuggable.com)
 
 ------------------------------------------------------------------------------
 text 8548bfb2bc19 — applies to:
-    github.com/prometheus/client_golang@v1.24.1 (NOTICE)
+    github.com/prometheus/client_golang@v1.25.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 Prometheus instrumentation library for Go applications
