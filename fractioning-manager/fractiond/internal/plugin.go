@@ -314,7 +314,22 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	// nvidia.com/gpu). Our assignment must win: remove any existing value first so
 	// NRI applies the override instead of rejecting it as a conflict, and the
 	// container ends up with a single, correct value rather than a duplicate.
-	visibleDevices := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	visibleDevices, err := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	if err != nil {
+		p.Log.Warn("failed to parse GPU device assignment annotation",
+			"container", ctr.Name,
+			"pod", pod.Name,
+			"error", err,
+		)
+		if !p.FailOpen {
+			return nil, fmt.Errorf("container %q in pod %q: %w", ctr.Name, pod.Name, err)
+		}
+		p.Log.Warn("not injecting NVIDIA_VISIBLE_DEVICES (fail-open)",
+			"container", ctr.Name,
+			"pod", pod.Name,
+		)
+		visibleDevices = ""
+	}
 	var cdiDevices []string
 	if visibleDevices != "" {
 		if containerHasEnv(ctr, injection.EnvVisibleDevices) {

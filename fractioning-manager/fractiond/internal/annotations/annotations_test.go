@@ -69,6 +69,7 @@ func TestParseVisibleDevices(t *testing.T) {
 		name        string
 		annotations map[string]string
 		expected    string
+		wantErr     bool
 	}{
 		{
 			name:        "single UUID",
@@ -76,19 +77,59 @@ func TestParseVisibleDevices(t *testing.T) {
 			expected:    "GPU-abc123",
 		},
 		{
-			name:        "comma-separated UUIDs passed through verbatim",
+			name:        "comma-separated UUIDs",
 			annotations: map[string]string{visibleDevicesTestKey: "GPU-abc123,GPU-def456"},
 			expected:    "GPU-abc123,GPU-def456",
 		},
 		{
-			name:        "surrounding whitespace trimmed",
-			annotations: map[string]string{visibleDevicesTestKey: "  GPU-abc123  "},
-			expected:    "GPU-abc123",
+			name:        "MIG UUIDs with surrounding whitespace",
+			annotations: map[string]string{visibleDevicesTestKey: "  MIG-abc123 , GPU-def456  "},
+			expected:    "MIG-abc123,GPU-def456",
 		},
 		{
-			name:        "index value passed through",
+			name:        "CDI-qualified UUIDs",
+			annotations: map[string]string{visibleDevicesTestKey: "k8s.device-plugin.nvidia.com/gpu=GPU-abc123,k8s.device-plugin.nvidia.com/gpu=MIG-def456"},
+			expected:    "k8s.device-plugin.nvidia.com/gpu=GPU-abc123,k8s.device-plugin.nvidia.com/gpu=MIG-def456",
+		},
+		{
+			name:        "CDI-qualified all is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "management.nvidia.com/gpu=all"},
+			wantErr:     true,
+		},
+		{
+			name:        "CDI-qualified index is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "nvidia.com/gpu=0"},
+			wantErr:     true,
+		},
+		{
+			name:        "UUID with a non-CDI qualifier is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "gpu=GPU-abc123"},
+			wantErr:     true,
+		},
+		{
+			name:        "bare index is refused",
 			annotations: map[string]string{visibleDevicesTestKey: "0"},
-			expected:    "0",
+			wantErr:     true,
+		},
+		{
+			name:        "all is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "all"},
+			wantErr:     true,
+		},
+		{
+			name:        "none is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "none"},
+			wantErr:     true,
+		},
+		{
+			name:        "UUID list with an index is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "GPU-abc123,1"},
+			wantErr:     true,
+		},
+		{
+			name:        "bare prefix is refused",
+			annotations: map[string]string{visibleDevicesTestKey: "GPU-"},
+			wantErr:     true,
 		},
 		{
 			name:        "absent annotation yields empty",
@@ -109,7 +150,11 @@ func TestParseVisibleDevices(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ParseVisibleDevices(tt.annotations, "trainer", "nvidia.com/container."); got != tt.expected {
+			got, err := ParseVisibleDevices(tt.annotations, "trainer", "nvidia.com/container.")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseVisibleDevices() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if got != tt.expected {
 				t.Errorf("ParseVisibleDevices() = %q, expected %q", got, tt.expected)
 			}
 		})

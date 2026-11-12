@@ -123,6 +123,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   not backfilled.
 
 ### Changed
+- fractiond now accepts only a comma-separated list of GPU or MIG UUIDs, bare
+  or CDI-qualified (`k8s.device-plugin.nvidia.com/gpu=GPU-...`), in the device
+  assignment annotation (`nvidia.com/container.<name>.gpus.devices`), which is
+  what the scheduler writes. The value used to be copied verbatim into
+  `NVIDIA_VISIBLE_DEVICES`, so a pod annotated `all` by anything other than the
+  scheduler got every GPU on the node under its fractional memory limit, and an
+  index such as `0` got a GPU chosen by position rather than by allocation. A
+  value that is not a UUID list now fails container creation, or under
+  `--fail-open` creates the container with the memory injection but no
+  `NVIDIA_VISIBLE_DEVICES` and no CDI device; the running-container audit
+  follows the same policy.
 - The `Ready` condition message on `GpuFractioningConfig` now says how many nodes
   a failing component is down on, e.g. `not ready: MpsdReady (7 of 10 pods ready)`
   instead of `not ready: MpsdReady`, so one bad node is distinguishable from all

@@ -332,14 +332,6 @@ func TestCreateContainerRequestsAssignedGPUAsCDIDevice(t *testing.T) {
 				injection.CDIKindDevicePlugin + "=GPU-def456",
 			},
 		},
-		{
-			// "all" selects devices without naming one, so there is no CDI
-			// device to request. The env var is still injected for the
-			// RuntimeClass path, which does understand it.
-			name:      "all names no device",
-			devices:   "all",
-			wantNoCDI: true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -382,6 +374,70 @@ func TestCreateContainerRequestsAssignedGPUAsCDIDevice(t *testing.T) {
 				if got[i] != want {
 					t.Errorf("CDI device %d = %q, want %q", i, got[i], want)
 				}
+			}
+		})
+	}
+}
+
+// TestCreateContainerRejectsNonUUIDDeviceAssignment covers a device assignment
+// that is not the UUID list the scheduler writes. "all" is a value the NVIDIA
+// container runtime would honour with every GPU on the node, so it is not
+// passed through: fail-closed blocks the container, fail-open creates it with
+// the memory injection but no NVIDIA_VISIBLE_DEVICES and no CDI device.
+func TestCreateContainerRejectsNonUUIDDeviceAssignment(t *testing.T) {
+	for _, devices := range []string{"all", "0", "GPU-abc123,all"} {
+		t.Run(devices, func(t *testing.T) {
+			pod := &api.PodSandbox{
+				Name: "test-pod",
+				Annotations: map[string]string{
+					"nvidia.com/container.trainer.gpu-memory.limit": "4Gi",
+					"nvidia.com/container.trainer.gpus.devices":     devices,
+				},
+			}
+			ctr := &api.Container{Name: "trainer"}
+
+			closed := newTestPlugin(t)
+			closed.InjectCDIDevice = true
+			if _, _, err := closed.CreateContainer(context.Background(), pod, ctr); err == nil {
+				t.Fatal("fail-closed: expected an error for a non-UUID device assignment, got nil")
+			}
+
+			var logBuf bytes.Buffer
+			open, err := NewPlugin(Config{
+				AnnotationPrefix: configuration.DefaultAnnotationPrefix,
+				MPSPipeDirectory: configuration.DefaultMPSPipeDirectory,
+				FailOpen:         true,
+				MapDir:           t.TempDir(),
+				Log:              slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			}, nil)
+			if err != nil {
+				t.Fatalf("NewPlugin: %v", err)
+			}
+			open.InjectCDIDevice = true
+			adj, _, err := open.CreateContainer(context.Background(), pod, ctr)
+			if err != nil {
+				t.Fatalf("fail-open: unexpected error: %v", err)
+			}
+			if adj == nil {
+				t.Fatal("fail-open: expected the memory injection to proceed, got nil adjustment")
+			}
+			gotLimit := false
+			for _, kv := range adj.Env {
+				switch kv.Key {
+				case injection.EnvVisibleDevices:
+					t.Errorf("fail-open: %s=%q was injected from a non-UUID assignment", kv.Key, kv.Value)
+				case injection.EnvGPUMemoryLimit:
+					gotLimit = true
+				}
+			}
+			if !gotLimit {
+				t.Error("fail-open: memory limit was not injected")
+			}
+			if len(adj.CDIDevices) != 0 {
+				t.Errorf("fail-open: expected no CDI devices, got %v", adj.CDIDevices)
+			}
+			if logBuf.Len() == 0 {
+				t.Error("fail-open: expected a warning log, got nothing")
 			}
 		})
 	}
