@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `spec.mpsDaemon.resources` on `GpuFractioningConfig`, set from the chart's
+  `mpsd.resources`, overrides the mpsd container's requests and limits key by
+  key. A request or limit left unset keeps the operator's default, so raising
+  only `limits.memory` leaves the scheduling footprint unchanged.
 - fractiond enforces GPU memory on AMD GPUs with `--gpu-vendor=amd` (`GPU_VENDOR=amd`, any case). The limit
   annotation becomes a limit of the Linux dmem cgroup controller (Linux 6.15+, `amdgpu`): it is written as
   `dmem.max` for each GPU named by PCI address in `gpus.devices`, on the container's cgroup through NRI. fractiond
