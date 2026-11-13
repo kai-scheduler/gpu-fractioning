@@ -194,3 +194,12 @@ live under `k8s/`; deployment is not a Go package — it's `helm` (see
 - `tests/operator/` — the operator/controller suite: CR/CEL validation, DaemonSet deployment shape, CR status + node conditions, fault injection/recovery, config propagation, teardown
 - `tests/fractiond/` — the fractiond data-plane suite: fractiond's NRI injection (GPU-memory env + MPS pipe mount on annotated containers, fail-closed/fail-open)
 - `hack/` — `create-cluster.py` + `requirements.txt`, the k3d + fake-gpu-operator provisioning script (Python, not Go — see above for why)
+
+## Upgrade check
+
+`make test-e2e-upgrade` installs the last published chart (`E2E_PREVIOUS_CHART_VERSION`,
+default `0.1.8`), upgrades it to the checkout through `e2e-deploy`, and checks that the
+`default` `GpuFractioningConfig` and the DaemonSets it owns kept their UIDs and that the
+CR is now owned by the release; it then uninstalls and checks both are gone. It needs a
+fresh e2e cluster with no release installed, and is run by the `upgrade` job in
+`.github/workflows/e2e.yaml`.
