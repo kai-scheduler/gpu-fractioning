@@ -29,13 +29,13 @@ COMPONENTS
 ==============================================================================
 
 cel.dev/expr
-    Version:      v0.25.2
+    Version:      v0.25.3
     Source:       https://github.com/google/cel-spec
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/NVIDIA/go-nvml
-    Version:      v0.13.3-1
+    Version:      v0.13.4-1
     Source:       https://github.com/NVIDIA/go-nvml
     Linked into:  metricsd, mpsd
     License:      LICENSE [text cfc7749b96f6]
@@ -77,7 +77,7 @@ github.com/containerd/log
     License:      LICENSE [text 4bbe3b885e8c]
 
 github.com/containerd/nri
-    Version:      v0.12.1
+    Version:      v0.12.5
     Source:       https://github.com/containerd/nri
     Linked into:  fractiond
     License:      LICENSE [text c71d239df917]
@@ -119,7 +119,7 @@ github.com/fsnotify/fsnotify
     License:      LICENSE [text 2dfbe6d2b5eb]
 
 github.com/fxamacker/cbor/v2
-    Version:      v2.9.0
+    Version:      v2.9.1
     Source:       https://github.com/fxamacker/cbor/v2
     Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text 78cad457d5ea]
@@ -227,7 +227,7 @@ github.com/go-openapi/swag
     License:      LICENSE [text cfc7749b96f6]
 
 github.com/google/cel-go
-    Version:      v0.29.0
+    Version:      v0.29.2
     Source:       https://github.com/google/cel-go
     Linked into:  operator
     License:      LICENSE [text 4cdb9af102df]
@@ -293,31 +293,31 @@ github.com/pmezard/go-difflib
     License:      LICENSE [text 2eb550be6801]
 
 github.com/prometheus/client_golang
-    Version:      v1.24.1
+    Version:      v1.25.0
     Source:       https://github.com/prometheus/client_golang
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 8548bfb2bc19]
 
 github.com/prometheus/client_model
-    Version:      v0.6.2
+    Version:      v0.6.3
     Source:       https://github.com/prometheus/client_model
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 6c79faa15168]
 
 github.com/prometheus/common
-    Version:      v0.70.1
+    Version:      v0.72.0
     Source:       https://github.com/prometheus/common
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 600244c8052c]
 
 github.com/prometheus/procfs
-    Version:      v0.21.1
+    Version:      v0.22.0
     Source:       https://github.com/prometheus/procfs
     Linked into:  metricsd, operator
     License:      LICENSE [text c71d239df917], NOTICE [text 497fcdb9fae5]
 
 github.com/sirupsen/logrus
-    Version:      v1.9.3
+    Version:      v1.9.4
     Source:       https://github.com/sirupsen/logrus
     Linked into:  fractiond
     License:      LICENSE [text 51a0c9ec7f8b]
@@ -329,7 +329,7 @@ github.com/spf13/cobra
     License:      LICENSE.txt [text 5e3400b93bbb]
 
 github.com/spf13/pflag
-    Version:      v1.0.9
+    Version:      v1.0.10
     Source:       https://github.com/spf13/pflag
     Linked into:  operator
     License:      LICENSE [text b8514c577c1c]
@@ -425,15 +425,15 @@ go.yaml.in/yaml/v3
     License:      LICENSE [text d18f6323b71b], NOTICE [text f6c2dd3a67b5]
 
 golang.org/x/exp
-    Version:      v0.0.0-20251219203646-944ab1f22d93
+    Version:      v0.0.0-20260410095643-746e56fc9e2f
     Source:       https://cs.opensource.google/go/x/exp
     Linked into:  operator
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/mod
-    Version:      v0.41.0
+    Version:      v0.42.0
     Source:       https://cs.opensource.google/go/x/mod
-    Linked into:  fractiond, operator
+    Linked into:  operator
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/net
@@ -443,7 +443,7 @@ golang.org/x/net
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/oauth2
-    Version:      v0.36.0
+    Version:      v0.37.0
     Source:       https://cs.opensource.google/go/x/oauth2
     Linked into:  mpsd, operator
     License:      LICENSE [text 911f8f578293]
@@ -473,7 +473,7 @@ golang.org/x/text
     License:      LICENSE [text 911f8f578293]
 
 golang.org/x/time
-    Version:      v0.14.0
+    Version:      v0.15.0
     Source:       https://cs.opensource.google/go/x/time
     Linked into:  mpsd, operator
     License:      LICENSE [text 911f8f578293]
@@ -497,7 +497,7 @@ google.golang.org/genproto/googleapis/rpc
     License:      LICENSE [text cfc7749b96f6]
 
 google.golang.org/grpc
-    Version:      v1.83.2
+    Version:      v1.85.0
     Source:       https://github.com/grpc/grpc-go
     Linked into:  fractiond, operator
     License:      LICENSE [text cfc7749b96f6], NOTICE.txt [text 693ff28ec216]
@@ -521,43 +521,43 @@ gopkg.in/inf.v0
     License:      LICENSE [text 050855d9ceed]
 
 k8s.io/api
-    Version:      v0.36.3
+    Version:      v0.37.2
     Source:       https://github.com/kubernetes/api
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/apiextensions-apiserver
-    Version:      v0.36.0
+    Version:      v0.37.0
     Source:       https://github.com/kubernetes/apiextensions-apiserver
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/apimachinery
-    Version:      v0.36.3
+    Version:      v0.37.2
     Source:       https://github.com/kubernetes/apimachinery
     Linked into:  fractiond, mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/apiserver
-    Version:      v0.36.0
+    Version:      v0.37.0
     Source:       https://github.com/kubernetes/apiserver
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/client-go
-    Version:      v0.36.3
+    Version:      v0.37.2
     Source:       https://github.com/kubernetes/client-go
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/component-base
-    Version:      v0.36.0
+    Version:      v0.37.0
     Source:       https://github.com/kubernetes/component-base
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/cri-api
-    Version:      v0.36.3
+    Version:      v0.37.2
     Source:       https://github.com/kubernetes/cri-api
     Linked into:  fractiond
     License:      LICENSE [text b40930bbcf80]
@@ -569,13 +569,13 @@ k8s.io/klog/v2
     License:      LICENSE [text 73ba74dfaa52]
 
 k8s.io/kube-openapi
-    Version:      v0.0.0-20260317180543-43fb72c5454a
+    Version:      v0.0.0-20260721132016-d427ff9ee9ad
     Source:       https://github.com/kubernetes/kube-openapi
     Linked into:  mpsd, operator
     License:      LICENSE [text cfc7749b96f6]
 
 k8s.io/streaming
-    Version:      v0.36.3
+    Version:      v0.37.2
     Source:       https://github.com/kubernetes/streaming
     Linked into:  operator
     License:      LICENSE [text cfc7749b96f6]
@@ -587,13 +587,13 @@ k8s.io/utils
     License:      LICENSE [text cfc7749b96f6]
 
 sigs.k8s.io/apiserver-network-proxy/konnectivity-client
-    Version:      v0.34.0
+    Version:      v0.36.0
     Source:       https://github.com/kubernetes-sigs/apiserver-network-proxy
     Linked into:  operator
     License:      LICENSE [text b40930bbcf80]
 
 sigs.k8s.io/controller-runtime
-    Version:      v0.24.1
+    Version:      v0.25.2
     Source:       https://github.com/kubernetes-sigs/controller-runtime
     Linked into:  operator
     License:      LICENSE [text b40930bbcf80]
@@ -611,7 +611,7 @@ sigs.k8s.io/randfill
     License:      LICENSE [text fafd604c0c06], NOTICE [text 69b2d8ca988f]
 
 sigs.k8s.io/structured-merge-diff/v6
-    Version:      v6.3.3
+    Version:      v6.4.2
     Source:       https://github.com/kubernetes-sigs/structured-merge-diff
     Linked into:  mpsd, operator
     License:      LICENSE [text b40930bbcf80]
@@ -631,8 +631,8 @@ Each distinct license text is reproduced once and referenced above by its
 
 ------------------------------------------------------------------------------
 text cfc7749b96f6 — applies to:
-    cel.dev/expr@v0.25.2 (LICENSE)
-    github.com/NVIDIA/go-nvml@v0.13.3-1 (LICENSE)
+    cel.dev/expr@v0.25.3 (LICENSE)
+    github.com/NVIDIA/go-nvml@v0.13.4-1 (LICENSE)
     github.com/go-openapi/jsonreference@v1.0.0 (LICENSE)
     github.com/go-openapi/swag/cmdutils@v0.28.0 (LICENSE)
     github.com/go-openapi/swag/conv@v0.28.0 (LICENSE)
@@ -648,15 +648,15 @@ text cfc7749b96f6 — applies to:
     github.com/go-openapi/swag@v0.28.0 (LICENSE)
     google.golang.org/genproto/googleapis/api@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
     google.golang.org/genproto/googleapis/rpc@v0.0.0-20260819154853-08b0e4226688 (LICENSE)
-    google.golang.org/grpc@v1.83.2 (LICENSE)
-    k8s.io/api@v0.36.3 (LICENSE)
-    k8s.io/apiextensions-apiserver@v0.36.0 (LICENSE)
-    k8s.io/apimachinery@v0.36.3 (LICENSE)
-    k8s.io/apiserver@v0.36.0 (LICENSE)
-    k8s.io/client-go@v0.36.3 (LICENSE)
-    k8s.io/component-base@v0.36.0 (LICENSE)
-    k8s.io/kube-openapi@v0.0.0-20260317180543-43fb72c5454a (LICENSE)
-    k8s.io/streaming@v0.36.3 (LICENSE)
+    google.golang.org/grpc@v1.85.0 (LICENSE)
+    k8s.io/api@v0.37.2 (LICENSE)
+    k8s.io/apiextensions-apiserver@v0.37.0 (LICENSE)
+    k8s.io/apimachinery@v0.37.2 (LICENSE)
+    k8s.io/apiserver@v0.37.0 (LICENSE)
+    k8s.io/client-go@v0.37.2 (LICENSE)
+    k8s.io/component-base@v0.37.0 (LICENSE)
+    k8s.io/kube-openapi@v0.0.0-20260721132016-d427ff9ee9ad (LICENSE)
+    k8s.io/streaming@v0.37.2 (LICENSE)
     k8s.io/utils@v0.0.0-20260707023825-cf1189d6abe3 (LICENSE)
 ------------------------------------------------------------------------------
 
@@ -865,16 +865,16 @@ text cfc7749b96f6 — applies to:
 
 ------------------------------------------------------------------------------
 text c71d239df917 — applies to:
-    github.com/containerd/nri@v0.12.1 (LICENSE)
+    github.com/containerd/nri@v0.12.5 (LICENSE)
     github.com/containerd/ttrpc@v1.2.7 (LICENSE)
     github.com/go-logr/stdr@v1.2.2 (LICENSE)
     github.com/go-openapi/jsonpointer@v1.0.0 (LICENSE)
     github.com/modern-go/concurrent@v0.0.0-20180306012644-bacd9c7ef1dd (LICENSE)
     github.com/modern-go/reflect2@v1.0.3-0.20250322232337-35a7c28c31ee (LICENSE)
-    github.com/prometheus/client_golang@v1.24.1 (LICENSE)
-    github.com/prometheus/client_model@v0.6.2 (LICENSE)
-    github.com/prometheus/common@v0.70.1 (LICENSE)
-    github.com/prometheus/procfs@v0.21.1 (LICENSE)
+    github.com/prometheus/client_golang@v1.25.0 (LICENSE)
+    github.com/prometheus/client_model@v0.6.3 (LICENSE)
+    github.com/prometheus/common@v0.72.0 (LICENSE)
+    github.com/prometheus/procfs@v0.22.0 (LICENSE)
     go.opentelemetry.io/auto/sdk@v1.2.1 (LICENSE)
     go.opentelemetry.io/proto/otlp@v1.11.0 (LICENSE)
 ------------------------------------------------------------------------------
@@ -1083,15 +1083,15 @@ text c71d239df917 — applies to:
 
 ------------------------------------------------------------------------------
 text 911f8f578293 — applies to:
-    golang.org/x/exp@v0.0.0-20251219203646-944ab1f22d93 (LICENSE)
-    golang.org/x/mod@v0.41.0 (LICENSE)
+    golang.org/x/exp@v0.0.0-20260410095643-746e56fc9e2f (LICENSE)
+    golang.org/x/mod@v0.42.0 (LICENSE)
     golang.org/x/net@v0.60.0 (LICENSE)
-    golang.org/x/oauth2@v0.36.0 (LICENSE)
+    golang.org/x/oauth2@v0.37.0 (LICENSE)
     golang.org/x/sync@v0.23.0 (LICENSE)
     golang.org/x/sys@v0.48.0 (LICENSE)
     golang.org/x/term@v0.46.0 (LICENSE)
     golang.org/x/text@v0.42.0 (LICENSE)
-    golang.org/x/time@v0.14.0 (LICENSE)
+    golang.org/x/time@v0.15.0 (LICENSE)
 ------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.
@@ -1370,10 +1370,10 @@ text b40930bbcf80 — applies to:
     github.com/go-logr/logr@v1.4.4 (LICENSE)
     github.com/go-logr/zapr@v1.3.0 (LICENSE)
     go.yaml.in/yaml/v2@v2.4.4 (LICENSE)
-    k8s.io/cri-api@v0.36.3 (LICENSE)
-    sigs.k8s.io/apiserver-network-proxy/konnectivity-client@v0.34.0 (LICENSE)
-    sigs.k8s.io/controller-runtime@v0.24.1 (LICENSE)
-    sigs.k8s.io/structured-merge-diff/v6@v6.3.3 (LICENSE)
+    k8s.io/cri-api@v0.37.2 (LICENSE)
+    sigs.k8s.io/apiserver-network-proxy/konnectivity-client@v0.36.0 (LICENSE)
+    sigs.k8s.io/controller-runtime@v0.25.2 (LICENSE)
+    sigs.k8s.io/structured-merge-diff/v6@v6.4.2 (LICENSE)
 ------------------------------------------------------------------------------
 
                                  Apache License
@@ -1942,7 +1942,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 497fcdb9fae5 — applies to:
-    github.com/prometheus/procfs@v0.21.1 (NOTICE)
+    github.com/prometheus/procfs@v0.22.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 procfs provides functions to retrieve system, kernel and process
@@ -2152,7 +2152,7 @@ text 4bbe3b885e8c — applies to:
 
 ------------------------------------------------------------------------------
 text 4cdb9af102df — applies to:
-    github.com/google/cel-go@v0.29.0 (LICENSE)
+    github.com/google/cel-go@v0.29.2 (LICENSE)
 ------------------------------------------------------------------------------
 
 
@@ -2391,7 +2391,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 51a0c9ec7f8b — applies to:
-    github.com/sirupsen/logrus@v1.9.3 (LICENSE)
+    github.com/sirupsen/logrus@v1.9.4 (LICENSE)
 ------------------------------------------------------------------------------
 
 The MIT License (MIT)
@@ -2936,7 +2936,7 @@ text 5e3400b93bbb — applies to:
 
 ------------------------------------------------------------------------------
 text 600244c8052c — applies to:
-    github.com/prometheus/common@v0.70.1 (NOTICE)
+    github.com/prometheus/common@v0.72.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 Common libraries shared by Prometheus Go components.
@@ -2981,7 +2981,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text 693ff28ec216 — applies to:
-    google.golang.org/grpc@v1.83.2 (NOTICE.txt)
+    google.golang.org/grpc@v1.85.0 (NOTICE.txt)
 ------------------------------------------------------------------------------
 
 Copyright 2014 gRPC authors.
@@ -3030,7 +3030,7 @@ Submitted on behalf of a third-party: @disconnect3d (Disconnect3d)
 
 ------------------------------------------------------------------------------
 text 6c79faa15168 — applies to:
-    github.com/prometheus/client_model@v0.6.2 (NOTICE)
+    github.com/prometheus/client_model@v0.6.3 (NOTICE)
 ------------------------------------------------------------------------------
 
 Data model artifacts for Prometheus.
@@ -3238,7 +3238,7 @@ third-party archives.
 
 ------------------------------------------------------------------------------
 text 78cad457d5ea — applies to:
-    github.com/fxamacker/cbor/v2@v2.9.0 (LICENSE)
+    github.com/fxamacker/cbor/v2@v2.9.1 (LICENSE)
 ------------------------------------------------------------------------------
 
 MIT License
@@ -3290,7 +3290,7 @@ Copyright (c) 2016 Felix Geisendörfer (felix@debuggable.com)
 
 ------------------------------------------------------------------------------
 text 8548bfb2bc19 — applies to:
-    github.com/prometheus/client_golang@v1.24.1 (NOTICE)
+    github.com/prometheus/client_golang@v1.25.0 (NOTICE)
 ------------------------------------------------------------------------------
 
 Prometheus instrumentation library for Go applications
@@ -3925,7 +3925,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ------------------------------------------------------------------------------
 text b8514c577c1c — applies to:
-    github.com/spf13/pflag@v1.0.9 (LICENSE)
+    github.com/spf13/pflag@v1.0.10 (LICENSE)
 ------------------------------------------------------------------------------
 
 Copyright (c) 2012 Alex Ogier. All rights reserved.

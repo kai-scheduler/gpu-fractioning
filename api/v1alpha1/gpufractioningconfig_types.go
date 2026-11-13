@@ -201,6 +201,14 @@ type MpsDaemonSpec struct {
 	// before force-killing it. Default: 60s.
 	// +optional
 	GracefulStopDelay *metav1.Duration `json:"gracefulStopDelay,omitempty"`
+
+	// resources overrides the mpsd container's resource requests and limits key by
+	// key; a request or limit not set here keeps its default (50m CPU, 64Mi memory
+	// and 100Mi ephemeral-storage requested, 1Gi memory limit, no CPU limit).
+	// The MPS control daemon's memory grows with the number of GPUs on the node,
+	// so raise the memory limit on large hosts rather than lowering it.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // GpuFractioningConfigStatus defines the observed state of GpuFractioningConfig.

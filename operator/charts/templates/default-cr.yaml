@@ -49,3 +49,8 @@ spec:
     volumeMounts:
       {{- toYaml .Values.metricsAgent.volumeMounts | nindent 6 }}
     {{- end }}
+  {{- with .Values.mpsd.resources }}
+  mpsDaemon:
+    resources:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
