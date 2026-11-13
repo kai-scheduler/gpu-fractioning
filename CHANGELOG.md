@@ -11,6 +11,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   `mpsd.resources`, overrides the mpsd container's requests and limits key by
   key. A request or limit left unset keeps the operator's default, so raising
   only `limits.memory` leaves the scheduling footprint unchanged.
+- fractiond enforces GPU memory on AMD GPUs with `--gpu-vendor=amd` (`GPU_VENDOR=amd`, any case). The limit
+  annotation becomes a limit of the Linux dmem cgroup controller (Linux 6.15+, `amdgpu`): it is written as
+  `dmem.max` for each GPU named by PCI address in `gpus.devices`, on the container's cgroup through NRI. fractiond
+  reads the host's `dmem.capacity` (`--dmem-capacity-file`) to be ready only on nodes whose GPU VRAM is a dmem
+  region, and to refuse a container whose GPU has none with a clear error (or start it uncapped with
+  `--fail-open`). Retroactive enforcement sets the missing `dmem.max` in place on containers created while
+  fractiond was down. `sm-sharing` is rejected for AMD GPUs. The operator does not deploy fractiond on AMD GPU
+  nodes yet; [docs/amd](docs/amd/README.md) covers the requirements, a DaemonSet to run, how to check a limit, the
+  limits of the cap, and troubleshooting.
 - OpenShift is now supported by a plain `helm install`, with no platform flag.
   The chart detects it by the presence of the `security.openshift.io/v1` API
   group, then creates a `SecurityContextConstraints` and grants `use` of it to
