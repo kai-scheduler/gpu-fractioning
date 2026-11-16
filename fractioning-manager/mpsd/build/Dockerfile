@@ -6,7 +6,7 @@
 # cross-compiling cgo needs a target cross-toolchain. Running this stage as
 # $TARGETPLATFORM uses the native compiler for that platform (emulated by
 # buildx/qemu when host != target).
-FROM --platform=$TARGETPLATFORM golang:1.27.1-bookworm AS builder
+FROM --platform=$TARGETPLATFORM golang:1.27.4-bookworm AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 # GOFIPS140 selects the Go Cryptographic Module version to link. "off" is the Go
@@ -41,7 +41,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ships that binary; the NVIDIA container runtime injects it from the host
 # driver because this container requests NVIDIA_DRIVER_CAPABILITIES=compute.
 # The base is CUDA only because NGC publishes no plain UBI9 image.
-FROM nvcr.io/nvidia/cuda:13.4.1-base-ubi9
+FROM nvcr.io/nvidia/cuda:13.5.0-base-ubi9
 
 # Base-image hardening, byte-identical to the metricsd runtime stage — change
 # one, change the other. Unused tooling is removed rather than patched, and

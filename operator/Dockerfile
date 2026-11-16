@@ -4,7 +4,7 @@
 # Build on the native BUILDPLATFORM and cross-compile to the target arch. The
 # operator is CGO_ENABLED=0, so cross-compilation is pure Go (no emulation) —
 # much faster than running the whole build under qemu for a foreign --platform.
-FROM --platform=$BUILDPLATFORM golang:1.27.1 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 # GOFIPS140 selects the Go Cryptographic Module version to link. "off" is the Go
