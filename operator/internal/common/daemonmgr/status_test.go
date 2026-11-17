@@ -185,6 +185,16 @@ func TestAggregateReadyCondition(t *testing.T) {
 			expectedMsg:    "unknown: FractiondReady, MpsdReady",
 		},
 		{
+			name: "component message with node scope is included",
+			conditions: []metav1.Condition{
+				{Type: "FractiondReady", Status: metav1.ConditionTrue, Message: "40 of 40 pods ready"},
+				{Type: "MpsdReady", Status: metav1.ConditionFalse, Message: "39 of 40 pods ready"},
+			},
+			expectedStatus: metav1.ConditionFalse,
+			expectedReason: ReasonComponentNotReady,
+			expectedMsg:    "not ready: MpsdReady (39 of 40 pods ready)",
+		},
+		{
 			name: "multiple false and unknown - only false reported",
 			conditions: []metav1.Condition{
 				{Type: "FractiondReady", Status: metav1.ConditionFalse},

@@ -72,3 +72,20 @@ func TestParseDriverMajorLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckSupportedMajor(t *testing.T) {
+	for _, tc := range []struct {
+		major   int
+		wantErr bool
+	}{
+		{major: 580, wantErr: true},
+		{major: MinimumSupportedMajor - 1, wantErr: true},
+		{major: MinimumSupportedMajor, wantErr: false},
+		{major: 620, wantErr: false},
+	} {
+		err := CheckSupportedMajor(tc.major)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("CheckSupportedMajor(%d) error = %v, wantErr %t", tc.major, err, tc.wantErr)
+		}
+	}
+}

@@ -77,6 +77,34 @@ func DaemonResources(cpuRequest, memRequest, memLimit string) corev1.ResourceReq
 	}
 }
 
+// MergeResources applies the requests and limits set in override on top of base,
+// key by key, so a user who only raises the memory limit keeps the default
+// requests. A nil override returns base unchanged.
+func MergeResources(base corev1.ResourceRequirements, override *corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if override == nil {
+		return base
+	}
+	merged := corev1.ResourceRequirements{
+		Requests: mergeResourceList(base.Requests, override.Requests),
+		Limits:   mergeResourceList(base.Limits, override.Limits),
+	}
+	return merged
+}
+
+func mergeResourceList(base, override corev1.ResourceList) corev1.ResourceList {
+	if len(base) == 0 && len(override) == 0 {
+		return base
+	}
+	merged := make(corev1.ResourceList, len(base)+len(override))
+	for name, quantity := range base {
+		merged[name] = quantity.DeepCopy()
+	}
+	for name, quantity := range override {
+		merged[name] = quantity.DeepCopy()
+	}
+	return merged
+}
+
 // PrivilegedSecurityContext returns a SecurityContext with privileged=true,
 // required by both fractiond (NRI socket access) and mpsd (MPS daemon).
 func PrivilegedSecurityContext() *corev1.SecurityContext {

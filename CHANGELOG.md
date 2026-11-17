@@ -7,6 +7,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ## [Unreleased]
 
 ### Added
+- `spec.mpsDaemon.resources` on `GpuFractioningConfig`, set from the chart's
+  `mpsd.resources`, overrides the mpsd container's requests and limits key by
+  key. A request or limit left unset keeps the operator's default, so raising
+  only `limits.memory` leaves the scheduling footprint unchanged.
 - OpenShift is now supported by a plain `helm install`, with no platform flag.
   The chart detects it by the presence of the `security.openshift.io/v1` API
   group, then creates a `SecurityContextConstraints` and grants `use` of it to
@@ -119,6 +123,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   not backfilled.
 
 ### Changed
+- The `Ready` condition message on `GpuFractioningConfig` now says how many nodes
+  a failing component is down on, e.g. `not ready: MpsdReady (7 of 10 pods ready)`
+  instead of `not ready: MpsdReady`, so one bad node is distinguishable from all
+  of them. The `Ready` reason is unchanged.
 - All four images move to new base images. `operator` and `fractiond` move from
   `nvcr.io/nvidia/distroless/go:v4.1.4` to `scratch`: both are `CGO_ENABLED=0`
   and fully static, so each image is now just the binary, its attribution and a
@@ -156,6 +164,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   provide toolkit-specific failure diagnostics, honor `skipGpuStackVersionChecks`,
   and remove the toolkit label when the configuration is deleted. Restart mpsd
   after an out-of-band toolkit upgrade to refresh detection.
+- mpsd no longer tries to start the MPS control daemon on a node whose NVIDIA
+  driver is older than r615. The `-p 3` and `-a` flags it passes belong to the
+  MPS v3 interface, and a pre-r615 `nvidia-cuda-mps-control` rejects them with
+  its usage text and exit code 0, which the supervisor retried five times as an
+  unexpected clean exit before the pod went into `CrashLoopBackOff` with the
+  cause buried under the help output. mpsd already reads the driver major via
+  NVML before starting MPS; it now checks it against the same minimum the
+  operator's dependency check uses and exits with a message naming the driver
+  and the minimum. The operator still reports the node as
+  `GPUDriverVersionUnsupported`.
+- The mpsd container's default memory limit is raised from 256Mi to 1Gi. The
+  MPS control daemon's memory is mostly driver host allocations charged to the
+  pod's cgroup and grows with the number of GPUs on the node, so on a 4-GPU
+  host mpsd was OOM-killed at startup with the processes' own RSS under 70Mi,
+  the node's `gpu-fractioning.nvidia.com/Ready` condition went `False` and
+  every fractional pod was rejected from it. The limit could not be changed:
+  the operator reverts edits to the DaemonSet it manages. Requests are
+  unchanged, so the daemons' scheduling footprint is the same.
 - The fractiond DaemonSet pods now run as the gpu-fractioning daemon ServiceAccount rather than the namespace's `default`. Neither fractiond nor its metricsd sidecar calls the Kubernetes API, so no ServiceAccount was set and the pods fell back to `default` — reasonable on Kubernetes, where it avoids mounting a credential nothing uses, and fatal on OpenShift, where a privileged pod is admitted against the `SecurityContextConstraints` granted to its ServiceAccount. The pods are privileged with host PID and host path mounts, which no default SCC permits, so the DaemonSet rolled out to zero pods: `get daemonset` showed the desired count with none current, the reason appeared only as a `FailedCreate` event on the DaemonSet, and the `GpuFractioningConfig` reported `FractiondReady=False` with a rollout in progress that would never finish. mpsd was unaffected, having a ServiceAccount already because it patches a node label. The ServiceAccount is now set for identity rather than access, and `automountServiceAccountToken: false` keeps the credential unmounted — SCC admission reads the ServiceAccount name, not its token, so declining the token costs nothing. Granting the SCC to the `default` ServiceAccount would also have worked, and was rejected: it privileges every pod in the namespace that happens to use it.
 - A GPU Operator installed through OLM no longer fails the GPU stack version gate for a version it does publish. The gate reads the operator's own version only to resolve an operand the `ClusterPolicy` leaves unset, and it read it only from that resource's `app.kubernetes.io/version` label, falling back to the OLM `ClusterServiceVersion` solely when no `ClusterPolicy` was readable at all. An OLM install satisfies neither branch: it creates a `ClusterPolicy` from the bundle's `alm-examples`, which carries no labels and pins no operand versions, so both operands counted as defaulted, the label resolved to empty, and `GpuFractioningConfig` reported `Ready=False` with `GPUOperatorVersionUnsupported` saying the version was missing — on a current, fully supported operator. A Helm-installed GPU Operator was unaffected, since its chart both labels the `ClusterPolicy` and pins the operands, so the failure appeared only on OpenShift, where OLM is how the GPU Operator normally arrives. The only ways out were labelling another operator's resource by hand or disabling the gate wholesale with `skipGpuStackVersionChecks`, which also stops gating a stack that genuinely cannot fence GPU memory. The `ClusterServiceVersion` is now consulted whenever the `ClusterPolicy` yields no readable version, not only when the `ClusterPolicy` is absent. Precedence is unchanged where a version is readable: a labelled `ClusterPolicy` still wins over a stale CSV left by an earlier OLM revision, pinned operands are still compared directly and never inferred from the operator version, and a genuine CSV below the floor still blocks exactly as before. The message for a version below the floor now also names where that version was read from, as the messages for a missing or unparseable one already did — with two sources now reaching that check, a bare version number left the reader guessing which object to go and look at.
 - The GPU Operator version is no longer read from a `ClusterServiceVersion` belonging to another vendor. Where no `ClusterPolicy` is readable the installed version is discovered from OLM, and the CSV was matched on its name prefix alone — which is not unique to NVIDIA, and in particular matches operators that stand in for the GPU Operator in test clusters. On such a cluster the stand-in's own version was read as the GPU Operator's, compared against the `v26.7.1` floor, and reported as `GPUOperatorVersionUnsupported`, leaving `GpuFractioningConfig` not ready over a version that was never the GPU Operator's. The same cluster without OLM was unaffected, since with no CSV to find the version gate is skipped, so the failure appeared only on OpenShift. A CSV that declares a vendor other than NVIDIA in `spec.provider.name` is now passed over as though it were absent, which leaves the version gate skipped rather than failed; the vendor is matched as a case-insensitive substring, since the certified operator publishes `NVIDIA Corporation`. The field is optional, so a CSV that omits it is still gated on the name prefix alone, as before. A genuine GPU Operator CSV below the floor is still reported exactly as before.

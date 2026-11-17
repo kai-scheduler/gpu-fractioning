@@ -14,7 +14,23 @@ const (
 	// NVIDIADriverMajorLabel is written by the mpsd DaemonSet after reading the
 	// node-local driver version via NVML during startup.
 	NVIDIADriverMajorLabel = "gpu-fractioning.kai.scheduler/nvidia-driver-version.major"
+
+	// MinimumSupportedMajor is the oldest NVIDIA driver major branch that ships
+	// the MPS v3 control protocol (-p 3) and memacct (-a) that mpsd starts the
+	// control daemon with. Older nvidia-cuda-mps-control binaries reject those
+	// flags, so both mpsd and the operator's dependency check gate on it.
+	MinimumSupportedMajor = 615
 )
+
+// CheckSupportedMajor returns an error naming the minimum when major is an
+// NVIDIA driver branch gpu-fractioning cannot run on.
+func CheckSupportedMajor(major int) error {
+	if major < MinimumSupportedMajor {
+		return fmt.Errorf("NVIDIA driver major version %d is below the minimum %d gpu-fractioning supports (MPS v3 with memory accounting needs r%d or newer)",
+			major, MinimumSupportedMajor, MinimumSupportedMajor)
+	}
+	return nil
+}
 
 // ParseDriverVersionMajor extracts the major branch from an NVML driver version
 // string such as "615.43.02". NVIDIA driver versions look like dotted versions,

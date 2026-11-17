@@ -59,7 +59,7 @@ func TestPatchNodeDriverMajor(t *testing.T) {
 
 func TestLabelCurrentNodeRequiresNodeName(t *testing.T) {
 	t.Setenv(envNodeName, "")
-	err := LabelCurrentNode(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, err := LabelCurrentNode(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err == nil {
 		t.Fatal("LabelCurrentNode() error = nil, expected error")
 	}

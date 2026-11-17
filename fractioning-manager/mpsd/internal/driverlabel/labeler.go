@@ -28,35 +28,37 @@ const (
 
 // LabelCurrentNode reads the local NVIDIA driver version via NVML and labels
 // the current node with the parsed driver major branch.
-func LabelCurrentNode(ctx context.Context, logger *slog.Logger) error {
+// It returns the driver major it found so the caller can refuse to start MPS on
+// a branch that does not support the flags mpsd uses.
+func LabelCurrentNode(ctx context.Context, logger *slog.Logger) (int, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	nodeName := os.Getenv(envNodeName)
 	if nodeName == "" {
-		return fmt.Errorf("%s is required", envNodeName)
+		return 0, fmt.Errorf("%s is required", envNodeName)
 	}
 
 	driverVersion, err := driverVersionFromNVML(logger)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	major, err := driverinfo.ParseDriverVersionMajor(driverVersion)
 	if err != nil {
-		return fmt.Errorf("parse NVIDIA driver version %q: %w", driverVersion, err)
+		return 0, fmt.Errorf("parse NVIDIA driver version %q: %w", driverVersion, err)
 	}
 
 	if err := patchNodeDriverMajor(ctx, nodeName, major); err != nil {
-		return err
+		return 0, err
 	}
 
 	logger.Info("labeled node with NVIDIA driver major version",
 		"driverVersion", driverVersion,
 		"driverMajor", major,
 	)
-	return nil
+	return major, nil
 }
 
 func driverVersionFromNVML(logger *slog.Logger) (string, error) {
