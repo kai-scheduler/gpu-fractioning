@@ -66,6 +66,10 @@ func main() {
 		logger.Error("not starting the MPS control daemon on this node", "error", err, "driverMajor", driverMajor)
 		os.Exit(1)
 	}
+	if err := driverlabel.ValidateHostToolkit(ctx); err != nil {
+		logger.Error("validate host NVIDIA Container Toolkit", "error", err)
+		os.Exit(1)
+	}
 
 	supervisor := internal.NewSupervisor(internal.SupervisorConfig{
 		MPSBinary:     flags.mpsBinary,

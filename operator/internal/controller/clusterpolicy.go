@@ -5,6 +5,7 @@ package controller
 
 import (
 	"context"
+	"path"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,6 +48,25 @@ type ClusterPolicy struct {
 	// the reconcile can proceed and surface it on the Ready condition in the
 	// same place it always has.
 	Err error
+}
+
+// ToolkitBinary selects a host binary, not a version from desired-state metadata.
+// Only an explicit enabled=false uses the package installation's PATH. Otherwise
+// the GPU Operator defaults to installing under /usr/local/nvidia/toolkit.
+// An absent policy leaves discovery to mpsd; read errors remain handled by Check.
+func (p ClusterPolicy) ToolkitBinary() string {
+	if p.Policy == nil {
+		return ""
+	}
+	enabled, found, err := unstructured.NestedBool(p.Policy.Object, "spec", "toolkit", "enabled")
+	if err == nil && found && !enabled {
+		return "nvidia-ctk"
+	}
+	installDir, _, _ := unstructured.NestedString(p.Policy.Object, "spec", "toolkit", "installDir")
+	if installDir == "" {
+		installDir = "/usr/local/nvidia"
+	}
+	return path.Join(installDir, "toolkit", "nvidia-ctk")
 }
 
 // ReadClusterPolicy reads the NVIDIA GPU Operator ClusterPolicy. A missing CRD

@@ -6,11 +6,12 @@ require (
 	github.com/NVIDIA/go-nvml v0.13.4-1
 	github.com/containerd/nri v0.12.5
 	github.com/kai-scheduler/gpu-fractioning/pkg v0.0.0
-	google.golang.org/grpc v1.85.0
-	k8s.io/api v0.37.2
-	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
-	k8s.io/cri-api v0.37.2
+	golang.org/x/mod v0.42.0
+    google.golang.org/grpc v1.85.0
+    k8s.io/api v0.37.2
+    k8s.io/apimachinery v0.37.2
+    k8s.io/client-go v0.37.2
+    k8s.io/cri-api v0.37.2
 )
 
 replace github.com/kai-scheduler/gpu-fractioning/pkg => ./pkg

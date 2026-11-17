@@ -23,14 +23,15 @@ import (
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 const (
 	clusterPolicyVersionLabel = "app.kubernetes.io/version"
 	// minimumGPUOperatorVersion is the floor for the GPU Operator's own version,
-	// used only where the operand versions below cannot be verified directly: no
+	// used where the device-plugin version cannot be verified directly: no
 	// ClusterPolicy, or one that leaves an operand unset. It is the first release
-	// whose defaults satisfy both operands.
+	// whose default satisfies the device-plugin requirement.
 	minimumGPUOperatorVersion   = "v26.7.1"
 	clusterPolicyReadyState     = "ready"
 	clusterPolicyReadyCondition = "Ready"
@@ -54,15 +55,6 @@ type gpuOperandRequirement struct {
 }
 
 var gpuOperandRequirements = []gpuOperandRequirement{
-	{
-		// The container toolkit carries the apply-cuda-memory-limits CDI hook
-		// that applies the NVIDIA_GPU_MEMORY_REQUEST/NVIDIA_GPU_MEMORY_LIMIT
-		// values fractiond injects. On an older toolkit the limits are injected
-		// and nothing acts on them, so GPU memory goes unfenced silently.
-		name:       "container toolkit",
-		specPath:   []string{"spec", "toolkit", "version"},
-		minVersion: "v1.20.1",
-	},
 	{
 		name:       "device plugin",
 		specPath:   []string{"spec", "devicePlugin", "version"},
@@ -179,7 +171,8 @@ func (c GpuOperatorDependencyChecker) managementCDINamespaceFailureMessage(clust
 // empty strings when they do, when no version source is present, or when the
 // gates are bypassed.
 //
-// Where a ClusterPolicy exists the pinned operand versions are gated directly:
+// Toolkit versions are checked on each host by mpsd. Where a ClusterPolicy
+// exists, the remaining pinned operand versions are gated directly:
 // they are the dependency gpu-fractioning actually has. The GPU Operator version
 // is deliberately not checked against them — it is wrong in both directions,
 // rejecting an older operator whose operands were overridden onto supported
@@ -286,15 +279,15 @@ func versionDiscoveryErrorMessage(err error) string {
 	return fmt.Sprintf("unable to discover NVIDIA GPU Operator version from ClusterPolicy or ClusterServiceVersion: %v", err)
 }
 
-// GpuDriverDependencyChecker checks the gpu-fractioning-owned NVIDIA driver
-// label on a node. It is used only to refine already-unhealthy node conditions
-// with a clearer reason.
+// GpuDriverDependencyChecker checks the node-local driver and toolkit labels.
+// It refines already-unhealthy node conditions with a clearer reason.
 type GpuDriverDependencyChecker struct {
-	reader client.Reader
+	reader                   client.Reader
+	skipToolkitVersionChecks bool
 }
 
-func NewGpuDriverDependencyChecker(reader client.Reader) GpuDriverDependencyChecker {
-	return GpuDriverDependencyChecker{reader: reader}
+func NewGpuDriverDependencyChecker(reader client.Reader, skipToolkitVersionChecks bool) GpuDriverDependencyChecker {
+	return GpuDriverDependencyChecker{reader: reader, skipToolkitVersionChecks: skipToolkitVersionChecks}
 }
 
 func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, condition corev1.NodeCondition) (corev1.NodeCondition, error) {
@@ -313,6 +306,11 @@ func (c GpuDriverDependencyChecker) Check(ctx context.Context, nodeName string, 
 	if driverReason, driverMessage, found := gpuDriverFailureReason(node); found {
 		condition.Reason = driverReason
 		condition.Message = driverMessage
+	} else if !c.skipToolkitVersionChecks {
+		if reason, message := gpuToolkitFailureReason(node); reason != "" {
+			condition.Reason = reason
+			condition.Message = message
+		}
 	}
 	return condition, nil
 }
@@ -445,6 +443,24 @@ func gpuOperandVersionFailureMessage(clusterPolicy *unstructured.Unstructured) (
 	}
 
 	return "", defaulted
+}
+
+func gpuToolkitFailureReason(node *corev1.Node) (reason, message string) {
+	raw := strings.TrimSpace(node.Labels[toolkitinfo.VersionLabel])
+	if raw == "" {
+		return daemonmgr.ReasonGPUContainerToolkitVersionMissing,
+			"host NVIDIA Container Toolkit version is unavailable; check mpsd logs"
+	}
+	version := "v" + strings.TrimPrefix(raw, "v")
+	if !semver.IsValid(version) {
+		return daemonmgr.ReasonGPUContainerToolkitVersionInvalid,
+			fmt.Sprintf("host NVIDIA Container Toolkit version %q is invalid", raw)
+	}
+	if semver.Compare(version, toolkitinfo.MinimumVersion) < 0 {
+		return daemonmgr.ReasonGPUContainerToolkitVersionUnsupported,
+			fmt.Sprintf("host NVIDIA Container Toolkit version %s is below minimum supported version %s", raw, toolkitinfo.MinimumVersion)
+	}
+	return "", ""
 }
 
 func gpuDriverFailureReason(node *corev1.Node) (reason, message string, found bool) {
