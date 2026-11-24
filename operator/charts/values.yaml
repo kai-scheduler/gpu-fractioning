@@ -191,6 +191,17 @@ daemonServiceAccount:
   name: ""
   annotations: {}
 
+# daemonAdmissionPolicy pins the daemon ServiceAccount's only API write, the
+# driver-version annotation mpsd puts on its own pod, to that pod and that
+# annotation with a ValidatingAdmissionPolicy. RBAC alone grants patch on every
+# pod in the release namespace.
+daemonAdmissionPolicy:
+  # enabled: auto renders the policy when the cluster serves
+  # admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy (Kubernetes 1.30
+  # and newer); true forces it, for example on an offline `helm template`;
+  # false never renders it.
+  enabled: auto
+
 # metrics configures the controller's Prometheus metrics endpoint, served over
 # plain HTTP on `port` (matching the metricsd GPU metrics and KAI-Scheduler).
 metrics:

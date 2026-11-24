@@ -99,7 +99,7 @@ profiles:
         value: true
       # mpsd: use the fake-mps image (hack/fake-mps) instead of the real
       # nvidia/cuda-based build. It bundles the REAL mpsd supervisor, nvml-mock
-      # for the startup driver-major label, and a fake nvidia-cuda-mps-control
+      # for the startup driver-major record, and a fake nvidia-cuda-mps-control
       # that just creates the MPS control socket and idles, so mpsd reaches Ready
       # on a GPU-less k3d node. Paired with create-cluster.py repointing the
       # "nvidia" RuntimeClass at runc, this lets the operator reach full Ready

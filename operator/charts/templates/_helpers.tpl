@@ -196,3 +196,18 @@ Daemon service account name.
 {{- default "default" .Values.daemonServiceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+renderDaemonAdmissionPolicy decides whether the ValidatingAdmissionPolicy that
+pins the daemon ServiceAccount to its own pod is rendered: "auto" follows the
+presence of admissionregistration.k8s.io/v1 ValidatingAdmissionPolicy
+(Kubernetes 1.30 and newer), true and false force it.
+*/}}
+{{- define "gpu-fractioning.renderDaemonAdmissionPolicy" -}}
+{{- $mode := toString .Values.daemonAdmissionPolicy.enabled -}}
+{{- if eq $mode "true" -}}true
+{{- else if eq $mode "false" -}}false
+{{- else if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" -}}true
+{{- else -}}false
+{{- end -}}
+{{- end }}
