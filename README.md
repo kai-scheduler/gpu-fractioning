@@ -244,6 +244,7 @@ metadata:
     # limit is optional; omit it and it defaults to the request
     nvidia.com/container.trainer.gpu-memory.limit: 16Gi
 spec:
+  schedulerName: kai-scheduler
   automountServiceAccountToken: false
   containers:
     - name: trainer
