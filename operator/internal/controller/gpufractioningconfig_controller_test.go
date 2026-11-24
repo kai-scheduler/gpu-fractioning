@@ -27,6 +27,7 @@ import (
 	gpufractioningv1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 func TestPodFailureReason(t *testing.T) {
@@ -201,7 +202,7 @@ func TestBuildOptionsResolvesGpuInjection(t *testing.T) {
 
 			// The decision is only worth anything if it survives into the
 			// rendered DaemonSets, which is what the daemons actually run with.
-			for _, daemon := range buildDaemons(&config.Spec, testMpsdAuditLogTrue, testSupportSMSharingTrue) {
+			for _, daemon := range (&GpuFractioningConfigReconciler{MpsdAuditLog: testMpsdAuditLogTrue, SupportSMSharing: testSupportSMSharingTrue}).buildDaemons(&config.Spec, ClusterPolicy{}) {
 				if daemon.Name() != "mpsd" {
 					continue
 				}
@@ -223,7 +224,7 @@ func TestBuildOptionsResolvesGpuInjection(t *testing.T) {
 const (
 	supportedToolkitVersion      = "v1.20.1-ubuntu20.04"
 	supportedDevicePluginVersion = "v0.20.1"
-	oldToolkitVersion            = "v1.20.0-ubuntu20.04"
+	oldDevicePluginVersion       = "v0.20.0"
 )
 
 // clusterPolicyWithOperands is the ClusterPolicy a reconciler spec puts in front
@@ -240,8 +241,8 @@ func clusterPolicyWithOperands(toolkitVersion, devicePluginVersion string) *unst
 // builders and the dependency checker share one read, and envtest serves no
 // nvidia.com CRD — so a spec that needs pinned operand versions has to put them
 // here. Supplying them to the checker instead leaves the reconcile reading an
-// absent ClusterPolicy, which skips the version gate entirely and passes the
-// spec for the wrong reason.
+// absent ClusterPolicy, which skips the device-plugin version gate and passes
+// the spec for the wrong reason.
 type clusterPolicyAPIReader struct {
 	client.Reader
 	policy *unstructured.Unstructured
@@ -382,17 +383,17 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			Expect(ready.Reason).To(Equal(daemonmgr.ReasonAllComponentsReady))
 		})
 
-		It("should mark Ready false when a GPU Operator operand is downgraded while daemons stay healthy", func() {
+		It("should mark Ready false when the device plugin is downgraded while daemons stay healthy", func() {
 			// Two reconcilers rather than one with a mutated field: the
 			// downgrade is a change to what the API server serves, and the
 			// daemons and Ready=True persist in between, which is what makes
 			// this a transition and not a cold start.
-			newReconciler := func(toolkitVersion string) *GpuFractioningConfigReconciler {
+			newReconciler := func(devicePluginVersion string) *GpuFractioningConfigReconciler {
 				r := NewGpuFractioningConfigReconciler(
 					k8sClient,
 					clusterPolicyAPIReader{
 						Reader: k8sClient,
-						policy: clusterPolicyWithOperands(toolkitVersion, supportedDevicePluginVersion),
+						policy: clusterPolicyWithOperands(supportedToolkitVersion, devicePluginVersion),
 					},
 					k8sClient.Scheme(), record.NewFakeRecorder(10),
 					"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
@@ -402,12 +403,12 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 				return r
 			}
 
-			_, err := newReconciler(supportedToolkitVersion).Reconcile(ctx, reconcile.Request{
+			_, err := newReconciler(supportedDevicePluginVersion).Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			result, err := newReconciler(oldToolkitVersion).Reconcile(ctx, reconcile.Request{
+			result, err := newReconciler(oldDevicePluginVersion).Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
@@ -419,7 +420,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			Expect(ready).NotTo(BeNil())
 			Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 			Expect(ready.Reason).To(Equal(daemonmgr.ReasonGPUOperandVersionUnsupported))
-			Expect(ready.Message).To(ContainSubstring(oldToolkitVersion))
+			Expect(ready.Message).To(ContainSubstring(oldDevicePluginVersion))
 		})
 
 		It("should keep Ready true on an unsupported GPU Operator operand version when the version checks are bypassed", func() {
@@ -427,7 +428,7 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 				k8sClient,
 				clusterPolicyAPIReader{
 					Reader: k8sClient,
-					policy: clusterPolicyWithOperands(oldToolkitVersion, supportedDevicePluginVersion),
+					policy: clusterPolicyWithOperands(supportedToolkitVersion, oldDevicePluginVersion),
 				},
 				k8sClient.Scheme(), record.NewFakeRecorder(10),
 				"default", defaultImages, "gpu-fractioning-daemon", testMpsdAuditLogTrue, testSupportSMSharingTrue, testFIPSOnlyDisabled,
@@ -639,16 +640,18 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			createNode("g4-node-a", map[string]string{
 				"gpu-fractioning-test/target":     "true",
 				driverinfo.NVIDIADriverMajorLabel: "615",
+				toolkitinfo.VersionLabel:          "1.20.1",
 			}, true)
 			createNode("g4-node-b", map[string]string{
-				"gpu-fractioning-test/target":     "true",
-				driverinfo.NVIDIADriverMajorLabel: "615",
+				"gpu-fractioning-test/target": "true",
+				toolkitinfo.VersionLabel:      "1.20.1",
 			}, true)
 			// Outside the selector: cleanup is selector-scoped, so this node
 			// must not be touched even though it carries the condition.
 			createNode("g4-node-c", map[string]string{
 				"gpu-fractioning-test/other":      "true",
 				driverinfo.NVIDIADriverMajorLabel: "615",
+				toolkitinfo.VersionLabel:          "1.20.1",
 			}, true)
 
 			createConfig(resourceName, selectorLabels)
@@ -678,10 +681,13 @@ var _ = Describe("GpuFractioningConfig Controller", func() {
 			node := &corev1.Node{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-a"}, node)).To(Succeed())
 			Expect(node.Labels).NotTo(HaveKey(driverinfo.NVIDIADriverMajorLabel))
+			Expect(node.Labels).NotTo(HaveKey(toolkitinfo.VersionLabel))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-b"}, node)).To(Succeed())
 			Expect(node.Labels).NotTo(HaveKey(driverinfo.NVIDIADriverMajorLabel))
+			Expect(node.Labels).NotTo(HaveKey(toolkitinfo.VersionLabel))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-c"}, node)).To(Succeed())
 			Expect(node.Labels).To(HaveKeyWithValue(driverinfo.NVIDIADriverMajorLabel, "615"))
+			Expect(node.Labels).To(HaveKeyWithValue(toolkitinfo.VersionLabel, "1.20.1"))
 
 			By("preserving unrelated node conditions")
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "g4-node-a"}, node)).To(Succeed())

@@ -47,6 +47,13 @@ const (
 	MessageAllDaemonsReady    = "all gpu-fractioning daemons are running"
 )
 
+// Node-local Container Toolkit dependency failures.
+const (
+	ReasonGPUContainerToolkitVersionMissing     = "GPUContainerToolkitVersionMissing"
+	ReasonGPUContainerToolkitVersionInvalid     = "GPUContainerToolkitVersionInvalid"
+	ReasonGPUContainerToolkitVersionUnsupported = "GPUContainerToolkitVersionUnsupported"
+)
+
 // DaemonHealthToCondition maps a DaemonHealth to a metav1.Condition for the CR.
 // If reconcileErr is non-nil, the condition is set to False with reason ReconcileError.
 func DaemonHealthToCondition(daemonName string, health *DaemonHealth, generation int64, reconcileErr error) metav1.Condition {

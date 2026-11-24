@@ -38,6 +38,7 @@ import (
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/metrics"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 const (
@@ -52,7 +53,7 @@ const (
 	// NodeConditionCleanupFinalizer blocks GpuFractioningConfig deletion until the
 	// gpu-fractioning-owned node state is removed. Without it, DaemonSets are
 	// garbage-collected via owner references but nodes keep advertising stale
-	// Ready conditions and driver-major labels.
+	// Ready conditions and version labels.
 	NodeConditionCleanupFinalizer = "gpu-fractioning.nvidia.com/cleanup-node-conditions"
 )
 
@@ -141,16 +142,19 @@ func NewGpuFractioningConfigReconciler(
 		FIPSOnly:                  fipsOnly,
 		SkipGpuStackVersionChecks: skipGpuStackVersionChecks,
 		GpuOperatorChecker:        NewGpuOperatorDependencyChecker(apiReader, skipGpuStackVersionChecks, namespace),
-		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader),
+		GpuDriverChecker:          NewGpuDriverDependencyChecker(apiReader, skipGpuStackVersionChecks),
 	}
 }
 
 // buildDaemons constructs the managed daemons from the current CRD spec,
 // so each reconcile sees the latest configuration.
-func buildDaemons(spec *v1alpha1.GpuFractioningConfigSpec, mpsdAuditLog, supportSMSharing bool) []daemonmgr.ManagedDaemon {
+func (r *GpuFractioningConfigReconciler) buildDaemons(spec *v1alpha1.GpuFractioningConfigSpec, clusterPolicy ClusterPolicy) []daemonmgr.ManagedDaemon {
 	return []daemonmgr.ManagedDaemon{
-		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, supportSMSharing),
-		mpsd.NewMpsdDaemon(spec.MpsDaemon, mpsdAuditLog, supportSMSharing),
+		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, r.SupportSMSharing),
+		mpsd.NewMpsdDaemon(spec.MpsDaemon, r.MpsdAuditLog, r.SupportSMSharing, mpsd.ToolkitValidation{
+			SkipVersionChecks: r.SkipGpuStackVersionChecks,
+			Binary:            clusterPolicy.ToolkitBinary(),
+		}),
 	}
 }
 
@@ -191,7 +195,7 @@ func (r *GpuFractioningConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	// Reconcile each managed daemon and collect health + conditions.
 	var needsRequeue bool
-	daemons := buildDaemons(&config.Spec, r.MpsdAuditLog, r.SupportSMSharing)
+	daemons := r.buildDaemons(&config.Spec, clusterPolicy)
 
 	opts := r.buildOptions(ctx, &config, clusterPolicy)
 	for _, daemon := range daemons {
@@ -362,7 +366,7 @@ func (r *GpuFractioningConfigReconciler) reconcileDelete(ctx context.Context, co
 		return ctrl.Result{}, fmt.Errorf("cleaning up node conditions: %w", err)
 	}
 	if err := r.removeDriverMajorLabels(ctx, config.Spec.NodeSelector); err != nil {
-		return ctrl.Result{}, fmt.Errorf("cleaning up driver labels: %w", err)
+		return ctrl.Result{}, fmt.Errorf("cleaning up node version labels: %w", err)
 	}
 
 	controllerutil.RemoveFinalizer(config, NodeConditionCleanupFinalizer)
@@ -370,7 +374,7 @@ func (r *GpuFractioningConfigReconciler) reconcileDelete(ctx context.Context, co
 		return ctrl.Result{}, fmt.Errorf("removing finalizer: %w", err)
 	}
 
-	log.Info("removed node conditions, driver labels and finalizer; deletion can complete")
+	log.Info("removed node conditions, version labels and finalizer; deletion can complete")
 	return ctrl.Result{}, nil
 }
 
@@ -396,15 +400,15 @@ func (r *GpuFractioningConfigReconciler) removeDriverMajorLabels(ctx context.Con
 
 		for i := range nodeList.Items {
 			node := &nodeList.Items[i]
-			if node.Labels[driverinfo.NVIDIADriverMajorLabel] == "" {
+			if node.Labels[driverinfo.NVIDIADriverMajorLabel] == "" && node.Labels[toolkitinfo.VersionLabel] == "" {
 				continue
 			}
 
 			patchNode := &corev1.Node{}
 			patchNode.Name = node.Name
 			if err := r.Patch(ctx, patchNode, client.RawPatch(types.MergePatchType, patchBytes)); err != nil {
-				log.Error(err, "failed to remove driver label from node", "node", node.Name)
-				errs = append(errs, fmt.Errorf("removing driver label from node %s: %w", node.Name, err))
+				log.Error(err, "failed to remove version labels from node", "node", node.Name)
+				errs = append(errs, fmt.Errorf("removing version labels from node %s: %w", node.Name, err))
 			}
 		}
 
@@ -426,6 +430,7 @@ func removeDriverMajorLabelPatch() ([]byte, error) {
 		"metadata": map[string]any{
 			"labels": map[string]any{
 				driverinfo.NVIDIADriverMajorLabel: nil,
+				toolkitinfo.VersionLabel:          nil,
 			},
 		},
 	}

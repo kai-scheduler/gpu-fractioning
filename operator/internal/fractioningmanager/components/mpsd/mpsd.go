@@ -51,6 +51,15 @@ type daemon struct {
 	spec             *v1alpha1.MpsDaemonSpec
 	auditLog         bool // set  level of the memacct audit log
 	supportSMSharing bool // Helm-injected sm-sharing chicken bit
+	toolkit          ToolkitValidation
+}
+
+// ToolkitValidation selects the node-local toolkit check for mpsd only.
+// Binary is an absolute managed path, "nvidia-ctk" for host PATH lookup, or empty
+// to also search the default operator installation when ClusterPolicy is absent.
+type ToolkitValidation struct {
+	SkipVersionChecks bool
+	Binary            string
 }
 
 // NewMpsdDaemon returns a ManagedDaemon for the MPS daemon supervisor.
@@ -58,8 +67,8 @@ type daemon struct {
 // is the Helm-injected sm-sharing chicken bit: when false, mpsd renders its MPS
 // config with the shared server (context-share) disabled, exactly as it did
 // before the sm-sharing feature existed.
-func NewMpsdDaemon(spec *v1alpha1.MpsDaemonSpec, auditLog, supportSMSharing bool) daemonmgr.ManagedDaemon {
-	return &daemon{spec: spec, auditLog: auditLog, supportSMSharing: supportSMSharing}
+func NewMpsdDaemon(spec *v1alpha1.MpsDaemonSpec, auditLog, supportSMSharing bool, toolkit ToolkitValidation) daemonmgr.ManagedDaemon {
+	return &daemon{spec: spec, auditLog: auditLog, supportSMSharing: supportSMSharing, toolkit: toolkit}
 }
 
 func (d *daemon) Name() string { return daemonName }
@@ -119,6 +128,8 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 		corev1.EnvVar{Name: envCapabilities, Value: "compute,utility"},
 		corev1.EnvVar{Name: "MPS_MEMACCT_AUDIT_LOG", Value: strconv.FormatBool(d.auditLog)},
 		corev1.EnvVar{Name: "MPS_SUPPORT_SM_SHARING", Value: strconv.FormatBool(d.supportSMSharing)},
+		corev1.EnvVar{Name: "SKIP_GPU_STACK_VERSION_CHECKS", Value: strconv.FormatBool(d.toolkit.SkipVersionChecks)},
+		corev1.EnvVar{Name: "HOST_TOOLKIT_BINARY", Value: d.toolkit.Binary},
 	)
 	container.Env = append(container.Env, daemonmgr.FIPSOnlyEnv(opts.FIPSOnly)...)
 	result.Spec.Template.Spec.Containers = append(result.Spec.Template.Spec.Containers, container)

@@ -23,6 +23,7 @@ import (
 	v1alpha1 "github.com/kai-scheduler/gpu-fractioning/api/v1alpha1"
 	"github.com/kai-scheduler/gpu-fractioning/operator/internal/common/daemonmgr"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/driverinfo"
+	"github.com/kai-scheduler/gpu-fractioning/pkg/toolkitinfo"
 )
 
 func TestGpuOperatorDependencyChecker(t *testing.T) {
@@ -127,16 +128,15 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			// The case the GPU Operator version alone cannot catch: a supported
-			// operator running an operand pinned below its floor.
-			name:  "supported GPU Operator with an old container toolkit blocks Ready",
+			// The installed toolkit, rather than its declared version, is checked by mpsd.
+			name:  "old declared toolkit does not override host detection",
 			input: trueReady,
 			objects: []client.Object{
 				clusterPolicyOperandObject("v26.7.1", "v1.20.0-ubuntu20.04", "v0.20.1"),
 			},
-			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnsupported,
-			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
 			name:  "old device plugin blocks Ready",
@@ -188,41 +188,37 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
-			// The same default below the floor ships a toolkit that cannot apply
-			// the GPU-memory limits. Nothing pinned it, so the operator version
-			// is the only evidence there is — and it is evidence.
+			// An unset device-plugin version is still resolved through the operator floor.
 			name:  "unset operand version on an old GPU Operator blocks Ready",
 			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyOperandObject("v26.7.0", "", "v0.20.1"),
+				clusterPolicyOperandObject("v26.7.0", "v1.20.1", ""),
 			},
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "default container toolkit version that the ClusterPolicy leaves unset",
+			expectedMessage: "default device plugin version that the ClusterPolicy leaves unset",
 		},
 		{
-			// Both unset: the message names both operands so the reader knows
-			// what the operator version is standing in for.
-			name:  "all operand versions unset on an old GPU Operator names both",
+			// An unset device-plugin version still uses the GPU Operator floor.
+			name:  "unset versions on an old GPU Operator still gate the device plugin",
 			input: trueReady,
 			objects: []client.Object{
 				clusterPolicyOperandObject("v26.7.0", "", ""),
 			},
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
-			expectedMessage: "container toolkit and device plugin version",
+			expectedMessage: "device plugin version",
 		},
 		{
-			// A pinned operand below its floor is reported as itself, not
-			// deferred to the operator version, even with the other unset.
-			name:  "pinned operand below its floor wins over an unset one",
+			// Toolkit metadata no longer overrides the host version check.
+			name:  "old declared toolkit does not override supported device plugin defaults",
 			input: trueReady,
 			objects: []client.Object{
 				clusterPolicyOperandObject("v26.7.1", "v1.20.0-ubuntu20.04", ""),
 			},
-			expectedStatus:  metav1.ConditionFalse,
-			expectedReason:  daemonmgr.ReasonGPUOperandVersionUnsupported,
-			expectedMessage: "container toolkit version v1.20.0-ubuntu20.04",
+			expectedStatus:  metav1.ConditionTrue,
+			expectedReason:  daemonmgr.ReasonAllComponentsReady,
+			expectedMessage: daemonmgr.MessageAllComponentsReady,
 		},
 		{
 			// No label and no ClusterServiceVersion either, so the effective
@@ -230,7 +226,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			name:  "unset operand version with no GPU Operator version label blocks Ready",
 			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyOperandObject("", "", "v0.20.1"),
+				clusterPolicyOperandObject("", "v1.20.1", ""),
 			},
 			expectedStatus:  metav1.ConditionFalse,
 			expectedReason:  daemonmgr.ReasonGPUOperatorVersionUnsupported,
@@ -283,7 +279,7 @@ func TestGpuOperatorDependencyChecker(t *testing.T) {
 			name:  "bypass leaves an unset operand on an old GPU Operator alone",
 			input: trueReady,
 			objects: []client.Object{
-				clusterPolicyOperandObject("v26.7.0", "", "v0.20.1"),
+				clusterPolicyOperandObject("v26.7.0", "v1.20.1", ""),
 			},
 			skipVersionChecks: true,
 			expectedStatus:    metav1.ConditionTrue,
@@ -740,7 +736,14 @@ func TestGpuDriverDependencyChecker(t *testing.T) {
 					Labels: tt.labels,
 				}})
 			}
-			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build())
+			for _, object := range objects {
+				node := object.(*corev1.Node)
+				if node.Labels == nil {
+					node.Labels = map[string]string{}
+				}
+				node.Labels[toolkitinfo.VersionLabel] = "1.20.1"
+			}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(objects...).Build(), false)
 
 			got, err := checker.Check(context.Background(), "node-a", corev1.NodeCondition{
 				Type:    corev1.NodeConditionType(daemonmgr.NodeConditionType),
@@ -812,6 +815,66 @@ func TestGpuDriverFailureReason(t *testing.T) {
 			}
 			if gotReason != tt.expectedReason {
 				t.Fatalf("reason = %q, expected %q", gotReason, tt.expectedReason)
+			}
+		})
+	}
+}
+
+func TestNodeToolkitDependency(t *testing.T) {
+	for _, tt := range []struct{ version, reason string }{
+		{"1.19.1", daemonmgr.ReasonGPUContainerToolkitVersionUnsupported},
+		{"1.20.1-rc.1", daemonmgr.ReasonGPUContainerToolkitVersionUnsupported},
+		{"", daemonmgr.ReasonGPUContainerToolkitVersionMissing},
+		{"invalid", daemonmgr.ReasonGPUContainerToolkitVersionInvalid},
+		{"1.20.1", "CrashLoopBackOff"},
+		{"1.21.0", "CrashLoopBackOff"},
+	} {
+		t.Run(tt.version, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: "615", toolkitinfo.VersionLabel: tt.version,
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), false)
+			got, err := checker.Check(context.Background(), node.Name, corev1.NodeCondition{
+				Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff",
+			})
+			if err != nil || got.Reason != tt.reason || got.Status != corev1.ConditionFalse {
+				t.Fatalf("Check() = %+v, %v; want reason %s", got, err, tt.reason)
+			}
+		})
+	}
+}
+
+func TestToolkitIgnoresDeclaredVersionInAllModes(t *testing.T) {
+	for _, enabled := range []any{true, false, nil} {
+		for _, declared := range []string{"v1.19.1", "v1.20.1", ""} {
+			policy := clusterPolicyOperandObject("v26.7.1", declared, "v0.20.1")
+			if enabled != nil {
+				if err := unstructured.SetNestedField(policy.Object, enabled, "spec", "toolkit", "enabled"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if message, defaulted := gpuOperandVersionFailureMessage(policy); message != "" || len(defaulted) != 0 {
+				t.Fatalf("enabled=%v declared=%q: toolkit must use host detection, got %q, %v", enabled, declared, message, defaulted)
+			}
+		}
+	}
+}
+
+func TestToolkitBypassPreservesDriverCheck(t *testing.T) {
+	for _, tt := range []struct{ driver, reason string }{
+		{"615", "CrashLoopBackOff"},
+		{"614", daemonmgr.ReasonGPUDriverVersionUnsupported},
+	} {
+		t.Run(tt.driver, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: tt.driver, toolkitinfo.VersionLabel: "1.19.1",
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), true)
+			got, err := checker.Check(context.Background(), node.Name, corev1.NodeCondition{
+				Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff",
+			})
+			if err != nil || got.Reason != tt.reason {
+				t.Fatalf("Check() = %+v, %v; want reason %s", got, err, tt.reason)
 			}
 		})
 	}
@@ -975,5 +1038,81 @@ func clusterPolicyStatus(state, readyStatus, errorStatus, message string) map[st
 				"message": message,
 			},
 		},
+	}
+}
+
+func TestMpsdToolkitConfiguration(t *testing.T) {
+	for _, enabled := range []any{true, false, nil} {
+		for _, skip := range []bool{false, true} {
+			policy := clusterPolicyOperandObject("v26.7.1", "v1.19.1", "v0.20.1")
+			if enabled != nil {
+				if err := unstructured.SetNestedField(policy.Object, enabled, "spec", "toolkit", "enabled"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := &GpuFractioningConfigReconciler{SkipGpuStackVersionChecks: skip}
+			for _, daemon := range r.buildDaemons(&v1alpha1.GpuFractioningConfigSpec{}, ClusterPolicy{Policy: policy}) {
+				ds := daemon.BuildDaemonSet(daemonmgr.BuildOptions{})
+				for _, container := range ds.Spec.Template.Spec.Containers {
+					variables := map[string]string{}
+					for _, variable := range container.Env {
+						variables[variable.Name] = variable.Value
+					}
+					if daemon.Name() != "mpsd" {
+						if _, found := variables["SKIP_GPU_STACK_VERSION_CHECKS"]; found {
+							t.Fatal("toolkit configuration leaked to fractiond")
+						}
+						continue
+					}
+					wantSkip := "false"
+					if skip {
+						wantSkip = "true"
+					}
+					wantBinary := "/usr/local/nvidia/toolkit/nvidia-ctk"
+					if enabled == false {
+						wantBinary = "nvidia-ctk"
+					}
+					if variables["SKIP_GPU_STACK_VERSION_CHECKS"] != wantSkip || variables["HOST_TOOLKIT_BINARY"] != wantBinary {
+						t.Fatalf("enabled=%v bypass=%t: unexpected toolkit environment %v", enabled, skip, variables)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestSkippedToolkitProbePreservesNodeDiagnostics(t *testing.T) {
+	for _, version := range []string{"", "1.19.1", "invalid"} {
+		t.Run(version, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", Labels: map[string]string{
+				driverinfo.NVIDIADriverMajorLabel: "615", toolkitinfo.VersionLabel: version,
+			}}}
+			checker := NewGpuDriverDependencyChecker(fake.NewClientBuilder().WithObjects(node).Build(), true)
+			condition := corev1.NodeCondition{Status: corev1.ConditionFalse, Reason: "CrashLoopBackOff", Message: "original pod failure"}
+			got, err := checker.Check(context.Background(), node.Name, condition)
+			if err != nil || got != condition {
+				t.Fatalf("skipped probe changed diagnostics: %+v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestPreinstalledToolkitRetainsDevicePluginValidation(t *testing.T) {
+	policy := clusterPolicyOperandObject("v26.7.1", "v1.19.1", "v0.20.0")
+	if err := unstructured.SetNestedField(policy.Object, false, "spec", "toolkit", "enabled"); err != nil {
+		t.Fatal(err)
+	}
+	if message, _ := gpuOperandVersionFailureMessage(policy); !strings.Contains(message, "device plugin version v0.20.0") {
+		t.Fatalf("device plugin validation was lost: %s", message)
+	}
+}
+
+func TestClusterPolicyReadFailurePreservesDependencyError(t *testing.T) {
+	checker := NewGpuOperatorDependencyChecker(nil, false, testCheckerNamespace)
+	policy := ClusterPolicy{Err: errors.New("policy read failed")}
+	ready := metav1.Condition{Type: daemonmgr.ConditionReady, Status: metav1.ConditionTrue}
+	got, err := checker.Check(context.Background(), policy, &v1alpha1.GpuFractioningConfig{}, ready)
+	if err != nil || got.Status != metav1.ConditionFalse || got.Reason != daemonmgr.ReasonGPUOperatorNotReady {
+		t.Fatalf("policy read failure was lost: %+v, %v", got, err)
 	}
 }
