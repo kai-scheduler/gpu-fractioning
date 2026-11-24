@@ -370,8 +370,14 @@ go.opentelemetry.io/otel/exporters/otlp/otlptrace
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
 
+go.opentelemetry.io/otel/log
+    Version:      v1.47.0
+    Source:       https://github.com/open-telemetry/opentelemetry-go
+    Linked into:  operator
+    License:      LICENSE [text 1ae07514be1d]
+
 go.opentelemetry.io/otel/metric
-    Version:      v1.46.0
+    Version:      v1.47.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -383,13 +389,13 @@ go.opentelemetry.io/otel/sdk
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel/trace
-    Version:      v1.46.0
+    Version:      v1.47.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
 
 go.opentelemetry.io/otel
-    Version:      v1.46.0
+    Version:      v1.47.0
     Source:       https://github.com/open-telemetry/opentelemetry-go
     Linked into:  operator
     License:      LICENSE [text 1ae07514be1d]
@@ -1127,10 +1133,11 @@ text 1ae07514be1d — applies to:
     go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp@v0.70.0 (LICENSE)
     go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc@v1.46.0 (LICENSE)
     go.opentelemetry.io/otel/exporters/otlp/otlptrace@v1.46.0 (LICENSE)
-    go.opentelemetry.io/otel/metric@v1.46.0 (LICENSE)
+    go.opentelemetry.io/otel/log@v1.47.0 (LICENSE)
+    go.opentelemetry.io/otel/metric@v1.47.0 (LICENSE)
     go.opentelemetry.io/otel/sdk@v1.46.0 (LICENSE)
-    go.opentelemetry.io/otel/trace@v1.46.0 (LICENSE)
-    go.opentelemetry.io/otel@v1.46.0 (LICENSE)
+    go.opentelemetry.io/otel/trace@v1.47.0 (LICENSE)
+    go.opentelemetry.io/otel@v1.47.0 (LICENSE)
 ------------------------------------------------------------------------------
 
                                  Apache License
