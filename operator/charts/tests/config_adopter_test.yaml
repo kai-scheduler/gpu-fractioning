@@ -1,0 +1,62 @@
+# Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The hook annotations are the mechanism: the Job has to run before the
+# upgrade applies the CR, after the crd-upgrader, and only on upgrades.
+suite: config-adopter hook
+chart:
+  version: 0.1.0
+  appVersion: 0.1.0
+release:
+  name: gpu-fractioning
+  namespace: gpu-fractioning
+tests:
+  - it: runs the operator image's adopt-config subcommand for this release
+    templates:
+      - hooks/pre/config-adopter.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/kai-scheduler/gpu-fractioning/operator:0.1.0
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: ["adopt-config", "--release-name=gpu-fractioning", "--release-namespace=gpu-fractioning"]
+
+  - it: is a pre-upgrade hook after the crd-upgrader, cleaned up after it succeeds
+    templates:
+      - hooks/pre/config-adopter.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "3"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation
+
+  - it: may only read and patch the default GpuFractioningConfig
+    templates:
+      - hooks/pre/config-adopter-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["gpu-fractioning.kai.scheduler"]
+              resources: ["gpufractioningconfigs"]
+              resourceNames: ["default"]
+              verbs: ["get", "patch"]
+
+  - it: can be disabled
+    set:
+      configAdopter.enabled: false
+    templates:
+      - hooks/pre/config-adopter.yaml
+      - hooks/pre/config-adopter-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

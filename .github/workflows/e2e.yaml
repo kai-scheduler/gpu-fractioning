@@ -219,6 +219,80 @@ jobs:
         if: ${{ always() && steps.changes.outputs.e2e == 'true' }}
         run: make e2e-cluster-down
 
+  upgrade:
+    name: Upgrade e2e
+    runs-on: ubuntu-latest
+    # ~2 min to install the published chart + ~8 min build and upgrade + a short
+    # uninstall. No Go suite; the check is test/e2e/hack/upgrade-from-release.sh.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The upgrade check exercises the chart's hooks and the operator's
+      # adopt-config/delete-configs subcommands against a release created by the
+      # last published chart, so the chart, the operator and the check itself are
+      # relevant. Same exit-0-when-irrelevant pattern as the other jobs.
+      - name: Detect e2e-relevant changes
+        id: changes
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            e2e:
+              - 'operator/**'
+              - 'test/e2e/hack/upgrade-from-release.sh'
+              - 'test/e2e/e2e.mk'
+              - 'skaffold.yaml'
+              - '.github/workflows/e2e.yaml'
+              - '.github/actions/e2e-setup/**'
+
+      - name: No e2e-relevant changes — skipping suite
+        if: ${{ steps.changes.outputs.e2e != 'true' }}
+        run: echo "No changes under e2e-relevant paths; the upgrade check is not required for this change. Passing."
+
+      - name: Free disk space
+        if: ${{ steps.changes.outputs.e2e == 'true' }}
+        run: |
+          echo "before:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+            /usr/local/.ghcup /usr/share/swift /usr/local/graalvm /usr/lib/jvm || true
+          sudo docker system prune --all --force --volumes || true
+          echo "after:"; df -h /
+
+      - name: Set up e2e cluster
+        if: ${{ steps.changes.outputs.e2e == 'true' }}
+        uses: ./.github/actions/e2e-setup
+        with:
+          gpu-worker-nodes: ${{ env.E2E_GPU_WORKER_NODES }}
+          non-gpu-worker-nodes: ${{ env.E2E_NON_GPU_WORKER_NODES }}
+          cluster-name: ${{ env.E2E_CLUSTER_NAME }}
+          fake-gpu-operator-version: ${{ env.E2E_FAKE_GPU_OPERATOR_VERSION }}
+
+      # Installs the published chart, upgrades it to this checkout (skaffold builds
+      # the images and helm upgrades the release), checks the CR and DaemonSets
+      # kept their UIDs, then uninstalls and checks they are gone.
+      - name: Install the previous release, upgrade, uninstall
+        if: ${{ steps.changes.outputs.e2e == 'true' }}
+        run: make test-e2e-upgrade
+
+      - name: Collect diagnostics
+        if: ${{ (failure() || cancelled()) && steps.changes.outputs.e2e == 'true' }}
+        run: |
+          export KUBECONFIG="$HOME/.kube/${E2E_CLUSTER_NAME}.yaml"
+          echo "::group::helm"; helm list -A || true; helm history gso -n gpu-fractioning || true; echo "::endgroup::"
+          echo "::group::pods"; kubectl get pods -A -o wide || true; echo "::endgroup::"
+          echo "::group::events"; kubectl get events -A --sort-by=.lastTimestamp | tail -60 || true; echo "::endgroup::"
+          kubectl get gpufractioningconfig default -o yaml || true
+          kubectl -n gpu-fractioning get daemonsets,jobs -o wide || true
+          kubectl -n gpu-fractioning describe pods || true
+          kubectl -n gpu-fractioning logs -l app.kubernetes.io/component=config-adopter --tail=100 || true
+          kubectl -n gpu-fractioning logs -l app.kubernetes.io/component=config-cleanup --tail=100 || true
+          kubectl -n gpu-fractioning logs deploy/gso-gpu-fractioning --tail=200 || true
+
+      - name: Delete e2e cluster
+        if: ${{ always() && steps.changes.outputs.e2e == 'true' }}
+        run: make e2e-cluster-down
+
   fractiond:
     name: Fractiond e2e
     runs-on: ubuntu-latest

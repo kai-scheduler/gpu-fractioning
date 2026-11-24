@@ -39,6 +39,11 @@ E2E_REGISTRY_PORT             ?= 5001
 # release namespace). The Go suite reads this via E2E_OPERATOR_NAMESPACE.
 E2E_OPERATOR_NAMESPACE        ?= gpu-fractioning
 
+# Helm release the chart is installed as (must match skaffold.yaml's release
+# name) and the last published chart version test-e2e-upgrade upgrades from.
+E2E_HELM_RELEASE              ?= gso
+E2E_PREVIOUS_CHART_VERSION    ?= 0.1.8
+
 # Dedicated kubeconfig for the e2e cluster. create-cluster.py writes it here
 # (it can't use ~/.kube/config — the NRI mount breaks `k3d kubeconfig`), and the
 # deploy/test targets below point kubectl/helm/skaffold/go-test at it. This keeps
@@ -68,7 +73,7 @@ export E2E_KUBECONFIG
 
 .PHONY: e2e e2e-cluster-up e2e-cluster-down e2e-cluster-deps \
 	e2e-deploy e2e-undeploy e2e-kubeconfig-merge e2e-kubeconfig-unmerge \
-	test-e2e test-e2e-metrics test-e2e-operator test-e2e-fractiond run-e2e
+	test-e2e test-e2e-metrics test-e2e-operator test-e2e-fractiond test-e2e-upgrade run-e2e
 
 e2e: e2e-cluster-up e2e-deploy test-e2e
 
@@ -181,6 +186,16 @@ test-e2e-operator:
 # margin, under the job limit.
 test-e2e-fractiond:
 	cd test/e2e && E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) E2E_GPU_NODE_COUNT=$(E2E_GPU_WORKER_NODES) E2E_GPU_COUNT_PER_NODE=2 go test -tags e2e -v -timeout 20m ./tests/fractiond/...
+
+# test-e2e-upgrade installs the last published chart, which created the default
+# GpuFractioningConfig as a post-install hook, upgrades it to this checkout
+# through e2e-deploy and checks the CR and the DaemonSets it owns survived in
+# place (same UIDs, owned by the release), then uninstalls and checks they are
+# gone. Needs an e2e cluster (make e2e-cluster-up) and no release installed yet.
+test-e2e-upgrade:
+	E2E_KUBECONFIG=$(E2E_KUBECONFIG) E2E_OPERATOR_NAMESPACE=$(E2E_OPERATOR_NAMESPACE) \
+	E2E_HELM_RELEASE=$(E2E_HELM_RELEASE) E2E_PREVIOUS_CHART_VERSION=$(E2E_PREVIOUS_CHART_VERSION) \
+	bash test/e2e/hack/upgrade-from-release.sh
 
 # run-e2e runs the suite against whatever cluster the caller provides
 # (set E2E_KUBECONFIG=...). The suite never provisions a cluster, so this works

@@ -10,7 +10,7 @@ an existing install. It has to be a hook that *applies* the CRD rather than a
 hook that *is* one: Helm creates hook resources with a plain Create, and the
 before-hook-creation delete policy is skipped for CustomResourceDefinition.
 
-The Job waits for Established, so the post-install `default` CR cannot outrun it.
+The Job waits for Established, so the `default` CR in the release cannot outrun it.
 */}}
 apiVersion: batch/v1
 kind: Job
