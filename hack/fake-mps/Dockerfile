@@ -5,10 +5,10 @@
 # Fake mpsd image for fake-GPU E2E clusters.
 #
 # It contains the REAL mpsd supervisor (same code as the production image) plus a
-# FAKE nvidia-cuda-mps-control at the default path (/usr/bin/nvidia-cuda-mps-control)
+# FAKE nvidia-cuda-mps-control at a test-only path that runtime injection cannot replace
 # that just creates the control socket and idles. This exercises the real
 # supervisor + readiness + controller status/node-condition flow without a GPU,
-# and needs NO controller/CRD change (the supervisor uses the default binary path).
+# and needs NO controller/CRD change (MPS_CONTROL_BINARY selects the test program).
 #
 # Build from the REPO ROOT (context must include go.mod, pkg/, fractioning-manager/, hack/):
 #   docker build -f hack/fake-mps/Dockerfile -t <name>:<tag> .
@@ -53,9 +53,10 @@ ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV LD_LIBRARY_PATH=/usr/lib/nvml-mock
 ENV MOCK_NVML_CONFIG=/etc/nvml-mock/config.yaml
+ENV MPS_CONTROL_BINARY=/usr/local/libexec/gpu-fractioning-test/nvidia-cuda-mps-control
 
 COPY --from=mpsd-builder /mpsd /usr/local/bin/mpsd
-COPY --from=fake-builder /fake-mps /usr/bin/nvidia-cuda-mps-control
+COPY --from=fake-builder /fake-mps /usr/local/libexec/gpu-fractioning-test/nvidia-cuda-mps-control
 COPY --from=nvml-mock /libnvidia-ml.so.1 /usr/lib/nvml-mock/libnvidia-ml.so.1
 COPY hack/fake-mps/nvml-mock-config.yaml /etc/nvml-mock/config.yaml
 ENTRYPOINT ["/usr/local/bin/mpsd"]

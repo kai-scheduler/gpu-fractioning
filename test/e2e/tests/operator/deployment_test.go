@@ -164,8 +164,8 @@ func verifyFractiondPodSpec(ctx context.Context, t *testing.T) {
 	if !ds.Spec.Template.Spec.HostPID {
 		t.Error("fractiond pod: hostPID = false, want true")
 	}
-	if ds.Spec.Template.Spec.RuntimeClassName != nil {
-		t.Errorf("fractiond pod: runtimeClassName = %q, want unset", *ds.Spec.Template.Spec.RuntimeClassName)
+	if ds.Spec.Template.Spec.RuntimeClassName == nil || *ds.Spec.Template.Spec.RuntimeClassName != "nvidia" {
+		t.Error("fractiond pod must use the nvidia RuntimeClass in the Mokka setup")
 	}
 	sh, ok := daemonset.Container(ds, containerFractiond)
 	if !ok {
@@ -198,8 +198,8 @@ func verifyMpsdPodSpec(ctx context.Context, t *testing.T) {
 	if ds.Spec.Template.Spec.ServiceAccountName == "" {
 		t.Error("mpsd pod: serviceAccountName is empty")
 	}
-	if ds.Spec.Template.Spec.RuntimeClassName != nil {
-		t.Errorf("mpsd pod: runtimeClassName = %q, want unset", *ds.Spec.Template.Spec.RuntimeClassName)
+	if ds.Spec.Template.Spec.RuntimeClassName == nil || *ds.Spec.Template.Spec.RuntimeClassName != "nvidia" {
+		t.Error("mpsd pod must use the nvidia RuntimeClass in the Mokka setup")
 	}
 	mp, ok := daemonset.Container(ds, containerMpsd)
 	if !ok {

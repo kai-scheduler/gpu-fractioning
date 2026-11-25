@@ -1,7 +1,1 @@
-# Minimal, use-case-scoped deps for create-cluster.py — no docker SDK (we
-# don't build/pre-pull images here) and no rich (plain stdout is enough for
-# CI logs).
-typer>=0.12,<1
-pydantic>=2,<3
-pydantic-settings>=2,<3
-sh>=2,<3
+# create-cluster.py uses only the Python standard library.
