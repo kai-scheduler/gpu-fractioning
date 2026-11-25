@@ -187,3 +187,34 @@ func TestSynchronizeReplacesMappings(t *testing.T) {
 		t.Fatalf("unexpected synchronized mapping: %#v", got[0])
 	}
 }
+
+// A fractional container recorded before fractiond went down is gone by the
+// time the runtime delivers Synchronize. The snapshot is not empty (other,
+// non-fractional containers run on the node), so the stale mapping is pruned.
+func TestSynchronizeWithoutFractionalContainersPrunesStaleMapping(t *testing.T) {
+	plugin, reader := testMappingPlugin(t)
+
+	if _, _, err := plugin.CreateContainer(context.Background(),
+		&api.PodSandbox{
+			Name: "gone", Namespace: "default", Uid: "gone-uid",
+			Annotations: memAnnotations("trainer", "4Gi"),
+		},
+		gpuContainer("gone-id", "trainer", "", 0),
+	); err != nil {
+		t.Fatalf("CreateContainer returned error: %v", err)
+	}
+	if n := len(activeContainers(t, plugin, reader)); n != 1 {
+		t.Fatalf("expected the mapping to be recorded before the reconnect, got %d", n)
+	}
+
+	if _, err := plugin.Synchronize(context.Background(),
+		[]*api.PodSandbox{{Id: "p-plain", Name: "plain", Namespace: "kube-system", Uid: "plain-uid"}},
+		[]*api.Container{{Id: "plain-id", Name: "plain", PodSandboxId: "p-plain"}},
+	); err != nil {
+		t.Fatalf("Synchronize returned error: %v", err)
+	}
+
+	if got := activeContainers(t, plugin, reader); len(got) != 0 {
+		t.Fatalf("stale mapping survived a non-empty Synchronize: %#v", got)
+	}
+}

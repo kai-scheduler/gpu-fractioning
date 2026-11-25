@@ -54,7 +54,11 @@ type event struct {
 	adapt         adapter     // upsert
 	syncAdapt     syncAdapter // replace
 	containerID   string      // remove
-	fromReconnect bool        // replace: came from an NRI Synchronize (reconnect); skip Replace when infos is empty
+	fromReconnect bool        // replace: came from an NRI Synchronize (reconnect)
+	// snapshotHasNoContainers: the NRI Synchronize listed no containers at all,
+	// fractional or not. A snapshot with containers but no fractional ones is
+	// not this case and still runs Replace.
+	snapshotHasNoContainers bool
 }
 
 // Options configures a Processor.
@@ -115,17 +119,22 @@ func (p *Processor) Delete(containerID string) {
 // container set. Returns immediately; drops the event if the queue is full
 // rather than blocking the NRI callback.
 //
-// If the resulting container list is empty the Replace is skipped: an empty
-// Synchronize indicates containerd restarted and has not yet replayed existing
-// containers (observed in k3s/k3d). Pruning would wipe all mapping files and
-// cause a metric gap for every running workload; skipping preserves attribution
-// across the reconnect window. A subsequent non-empty Synchronize, or
-// individual Upsert/Delete events, will reconcile the directory.
+// snapshotHasNoContainers reports whether the NRI snapshot listed no containers
+// at all, before adapt drops the ones that carry no fractional GPU. On a
+// reconnect with such a snapshot the Replace is skipped: containerd restarted
+// and has not yet replayed existing containers (observed in k3s/k3d). Pruning
+// would wipe all mapping files and cause a metric gap for every running
+// workload; skipping preserves attribution across the reconnect window. A
+// subsequent non-empty Synchronize, or individual Upsert/Delete events, will
+// reconcile the directory.
 //
-// This is intentionally different from a non-reconnect Replace(nil): genuine
-// transitions to zero containers arrive via Delete events, not Synchronize.
-func (p *Processor) Synchronize(adapt func() []store.ContainerInfo) {
-	p.enqueue(item{event: event{kind: replace, syncAdapt: adapt, fromReconnect: true}})
+// A snapshot that has containers but none of them fractional is a real state,
+// not a replay gap: mappings recorded for containers that disappeared while the
+// plugin was down must be pruned, or the metrics sidecar keeps reporting them.
+func (p *Processor) Synchronize(adapt func() []store.ContainerInfo, snapshotHasNoContainers bool) {
+	p.enqueue(item{event: event{
+		kind: replace, syncAdapt: adapt, fromReconnect: true, snapshotHasNoContainers: snapshotHasNoContainers,
+	}})
 }
 
 // enqueue sends an item to the worker without blocking. If the queue is full the
@@ -186,7 +195,7 @@ func (p *Processor) apply(ev event) {
 		}
 	case replace:
 		infos := ev.syncAdapt()
-		if ev.fromReconnect && len(infos) == 0 {
+		if ev.fromReconnect && ev.snapshotHasNoContainers {
 			p.log.Debug("NRI Synchronize: skipping empty reconnect sync to preserve existing mapping files")
 			return
 		}
