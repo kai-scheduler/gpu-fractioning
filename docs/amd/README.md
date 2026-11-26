@@ -66,7 +66,7 @@ VRAM is a dmem region before it asks for a limit.
 | Limit seen by the process | the GPU reports the limit | the GPU reports its whole memory (`hipMemGetInfo`); see below |
 | Compute sharing | time-slicing or `sm-sharing` (MPS) | time-slicing only; `sm-sharing` is rejected |
 | Device assignment | `gpus.devices` → `NVIDIA_VISIBLE_DEVICES` (and CDI) | `gpus.devices` names the GPUs to limit; the GPU reaches the container through AMD's device plugin or the scheduler's own device injection |
-| Retroactive enforcement | stops a container created while fractiond was down, so it is recreated | sets the missing `dmem.max` on it in place, without a restart |
+| Retroactive enforcement | stops a container created while fractiond was down, so it is recreated | sets the missing `dmem.max` on it in place, without a restart; best-effort: a container whose limit cannot be computed, or whose update the runtime refuses, is logged and keeps running without the cap, also with `--fail-open=false`, until the next resynchronization |
 | Per-pod metrics (metricsd) | NVML | not yet; `dmem.current` on the container's cgroup holds its usage |
 | Deployed by the operator | yes | not yet: run fractiond yourself, as below |
 

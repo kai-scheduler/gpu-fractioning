@@ -15,9 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   annotation becomes a limit of the Linux dmem cgroup controller (Linux 6.15+, `amdgpu`): it is written as
   `dmem.max` for each GPU named by PCI address in `gpus.devices`, on the container's cgroup through NRI. fractiond
   reads the host's `dmem.capacity` (`--dmem-capacity-file`) to be ready only on nodes whose GPU VRAM is a dmem
-  region, and to refuse a container whose GPU has none with a clear error (or start it uncapped with
+  region (re-checked every 30 s until it is, so a node whose `amdgpu` binds late becomes ready), and to refuse a container whose GPU has none with a clear error (or start it uncapped with
   `--fail-open`). Retroactive enforcement sets the missing `dmem.max` in place on containers created while
-  fractiond was down. `sm-sharing` is rejected for AMD GPUs. The operator does not deploy fractiond on AMD GPU
+  fractiond was down, best-effort: a container it cannot update keeps running without the cap. `sm-sharing` is rejected for AMD GPUs. The operator does not deploy fractiond on AMD GPU
   nodes yet; [docs/amd](docs/amd/README.md) covers the requirements, a DaemonSet to run, how to check a limit, the
   limits of the cap, and troubleshooting.
 - OpenShift is now supported by a plain `helm install`, with no platform flag.

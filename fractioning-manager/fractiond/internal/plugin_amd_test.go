@@ -10,11 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/containerd/nri/pkg/api"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/amd"
 )
 
 // w7900Capacity is a dmem.capacity with two amdgpu GPUs' VRAM regions.
@@ -25,6 +28,7 @@ type amdOptions struct {
 	retroactive bool
 	capacity    *string // nil: no capacity file at all
 	readiness   ReadinessSetter
+	recheck     time.Duration // readiness re-check interval; 0 keeps the default
 }
 
 func newAMDPlugin(t *testing.T, o amdOptions) *Plugin {
@@ -50,6 +54,15 @@ func newAMDPlugin(t *testing.T, o amdOptions) *Plugin {
 	if err != nil {
 		t.Fatalf("NewPlugin: %v", err)
 	}
+	if o.recheck != 0 {
+		p.amdRecheck = o.recheck
+	}
+	// Stop a readiness re-check and wait for the mapping writer before
+	// t.TempDir() is removed.
+	t.Cleanup(func() {
+		p.stopAMDRecheck()
+		p.Flush()
+	})
 	return p
 }
 
@@ -186,9 +199,24 @@ func TestCreateContainerAMDFailOpen(t *testing.T) {
 	}
 }
 
-type readinessRecorder struct{ ready []bool }
+// readinessRecorder records SetReady calls; the readiness re-check calls it
+// from its own goroutine.
+type readinessRecorder struct {
+	mu    sync.Mutex
+	ready []bool
+}
 
-func (r *readinessRecorder) SetReady(ready bool) { r.ready = append(r.ready, ready) }
+func (r *readinessRecorder) SetReady(ready bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ready = append(r.ready, ready)
+}
+
+func (r *readinessRecorder) calls() []bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]bool(nil), r.ready...)
+}
 
 func TestSynchronizeAMDReadiness(t *testing.T) {
 	for _, tc := range []struct {
@@ -208,8 +236,8 @@ func TestSynchronizeAMDReadiness(t *testing.T) {
 				t.Fatal(err)
 			}
 			p.Flush()
-			if len(r.ready) != 1 || r.ready[0] != tc.wantReady {
-				t.Fatalf("readiness = %v, want [%v]", r.ready, tc.wantReady)
+			if got := r.calls(); len(got) != 1 || got[0] != tc.wantReady {
+				t.Fatalf("readiness = %v, want [%v]", got, tc.wantReady)
 			}
 		})
 	}
@@ -291,5 +319,94 @@ func TestNewPluginVendor(t *testing.T) {
 		if got := NormalizeVendor(in); got != want {
 			t.Errorf("NormalizeVendor(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func w7900Regions() (map[string]int64, error) {
+	return amd.ParseCapacity(strings.NewReader(w7900Capacity))
+}
+
+// TestAMDReadinessRecovers covers a node where amdgpu registers its VRAM regions
+// after fractiond synchronized: the plugin starts not ready and becomes ready on
+// its own, without another NRI connection.
+func TestAMDReadinessRecovers(t *testing.T) {
+	r := &readinessRecorder{}
+	p := newAMDPlugin(t, amdOptions{capacity: capacity(""), readiness: r, recheck: 10 * time.Millisecond})
+	if _, err := p.Synchronize(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.calls(); len(got) != 1 || got[0] {
+		t.Fatalf("readiness after Synchronize = %v, want [false]", got)
+	}
+	p.stopAMDRecheck() // swap the capacity source without racing the re-check
+	p.dmemCapacity = w7900Regions
+	p.startAMDRecheck()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := r.calls(); len(got) == 2 && got[1] {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("readiness = %v, want [false true]", r.calls())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestAMDReadinessRecheckStopsOnShutdown checks that a re-check cannot mark the
+// plugin ready after the runtime disconnected.
+func TestAMDReadinessRecheckStopsOnShutdown(t *testing.T) {
+	r := &readinessRecorder{}
+	reads := make(chan struct{}, 100)
+	p := newAMDPlugin(t, amdOptions{capacity: capacity(""), readiness: r, recheck: time.Millisecond})
+	p.dmemCapacity = func() (map[string]int64, error) {
+		reads <- struct{}{}
+		return map[string]int64{}, nil
+	}
+	if _, err := p.Synchronize(context.Background(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	<-reads // Synchronize's own check
+	<-reads // the re-check is running
+	p.Shutdown(context.Background())
+	if got := r.calls(); len(got) != 2 || got[0] || got[1] {
+		t.Fatalf("readiness = %v, want [false false]", got)
+	}
+	p.recheckMu.Lock()
+	running := p.stopRecheck != nil
+	p.recheckMu.Unlock()
+	if running {
+		t.Fatal("readiness re-check still registered after Shutdown")
+	}
+}
+
+// TestSynchronizeAMDReadsCapacityOnce checks that one Synchronize reads
+// dmem.capacity once, however many containers it re-applies limits to.
+func TestSynchronizeAMDReadsCapacityOnce(t *testing.T) {
+	p := newAMDPlugin(t, amdOptions{retroactive: true, capacity: capacity(w7900Capacity)})
+	reads := 0
+	p.dmemCapacity = func() (map[string]int64, error) {
+		reads++
+		return w7900Regions()
+	}
+	ann := map[string]string{
+		"nvidia.com/container.main.gpu-memory.limit": "1Gi",
+		"nvidia.com/container.main.gpus.devices":     "0000:03:00.0",
+	}
+	var pods []*api.PodSandbox
+	var containers []*api.Container
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		pods = append(pods, &api.PodSandbox{Id: "pod-" + id, Name: id, Annotations: ann})
+		containers = append(containers, &api.Container{Id: "ctr-" + id, PodSandboxId: "pod-" + id, Name: "main", State: api.ContainerState_CONTAINER_RUNNING})
+	}
+	updates, err := p.Synchronize(context.Background(), pods, containers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 5 {
+		t.Fatalf("updates = %d, want 5", len(updates))
+	}
+	if reads != 1 {
+		t.Fatalf("dmem.capacity read %d times in one Synchronize, want 1", reads)
 	}
 }
