@@ -65,6 +65,12 @@ type cliFlags struct {
 	criSocket string
 	// stopTimeout is the grace period handed to the runtime per container stop.
 	stopTimeout time.Duration
+	// gpuVendor selects the memory enforcement: nvidia (env vars, MPS) or amd
+	// (dmem cgroup limits; retroactive enforcement re-applies the limits in place).
+	// Normalized to lower case.
+	gpuVendor string
+	// dmemCapacityFile is the host's dmem.capacity, read with --gpu-vendor=amd.
+	dmemCapacityFile string
 }
 
 func parseFlags() cliFlags {
@@ -84,9 +90,12 @@ func parseFlags() cliFlags {
 	flag.DurationVar(&f.stableThreshold, "stable-threshold", 5*time.Minute, "connection duration considered stable (resets retry budget)")
 	flag.IntVar(&f.maxRetries, "max-retries", 0, "max NRI connection retries (0 = unlimited)")
 	flag.IntVar(&f.readinessPort, "readiness-port", env.Int("READINESS_PORT", defaultReadinessPort), "port for the /readyz readiness endpoint (0 disables)")
-	flag.BoolVar(&f.retroactiveEnforcement, "retroactive-enforcement", env.Bool("RETROACTIVE_ENFORCEMENT", true), "on NRI (re)connect, stop GPU-fractioning containers missing injection so kubelet recreates them correctly")
+	flag.BoolVar(&f.retroactiveEnforcement, "retroactive-enforcement", env.Bool("RETROACTIVE_ENFORCEMENT", true), "on NRI (re)connect, stop GPU-fractioning containers missing injection so kubelet recreates them correctly; with --gpu-vendor=amd, set the missing dmem.max on them in place instead")
 	flag.StringVar(&f.criSocket, "cri-socket", env.String("CRI_SOCKET", defaultCRISocketPath), "CRI runtime socket used to stop containers during retroactive enforcement")
 	flag.DurationVar(&f.stopTimeout, "stop-timeout", 30*time.Second, "grace period handed to the runtime for each container stop during enforcement")
+	flag.StringVar(&f.gpuVendor, "gpu-vendor", env.String("GPU_VENDOR", internal.VendorNVIDIA), "GPU vendor whose memory limits are enforced: nvidia, or amd (dmem cgroup limits)")
+	flag.StringVar(&f.dmemCapacityFile, "dmem-capacity-file", env.String("DMEM_CAPACITY_FILE", internal.DefaultDmemCapacityFile), "with --gpu-vendor=amd: the host's /sys/fs/cgroup/dmem.capacity, mounted into the container, used to check that each GPU's VRAM is a dmem region")
 	flag.Parse()
+	f.gpuVendor = internal.NormalizeVendor(f.gpuVendor)
 	return f
 }

@@ -7,12 +7,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/containerd/nri/pkg/api"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/amd"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/events"
@@ -75,6 +79,46 @@ type Config struct {
 	// delivered the full container state, so registration succeeded) and back to
 	// not-ready on Shutdown (the runtime is disconnecting).
 	Readiness ReadinessSetter
+
+	// Vendor selects how a container's GPU memory is enforced: VendorNVIDIA (the
+	// default, when empty) injects the NVIDIA_GPU_MEMORY_* env vars and the MPS
+	// pipe; VendorAMD sets dmem.max on the container's cgroup (see package amd).
+	// The value is matched case-insensitively. With VendorAMD, sm-sharing is
+	// rejected (AMD GPUs have no MPS), and RetroactiveEnforcement re-applies the
+	// limit to running containers on Synchronize instead of stopping them, so it
+	// needs no stopper.
+	Vendor string
+
+	// DmemCapacityFile is the host's root-cgroup dmem.capacity file, read with
+	// VendorAMD to check that each GPU's VRAM is a dmem region on this node
+	// (DefaultDmemCapacityFile when empty). The root-only file is not visible
+	// in the plugin's own cgroup namespace, so the host's /sys/fs/cgroup is
+	// mounted read-only.
+	DmemCapacityFile string
+}
+
+// GPU vendors the plugin enforces memory for.
+const (
+	VendorNVIDIA = "nvidia"
+	VendorAMD    = "amd"
+)
+
+// DefaultDmemCapacityFile is where the AMD backend reads the host's
+// dmem.capacity: the host's /sys/fs/cgroup mounted read-only at /host/sys/fs/cgroup.
+const DefaultDmemCapacityFile = "/host/sys/fs/cgroup/dmem.capacity"
+
+// DefaultAMDReadinessRecheck is how often a not-ready AMD node re-reads
+// dmem.capacity, so that it becomes ready once amdgpu registers its VRAM regions.
+const DefaultAMDReadinessRecheck = 30 * time.Second
+
+// NormalizeVendor returns the vendor name as the plugin compares it: trimmed and
+// lower case, with empty meaning VendorNVIDIA.
+func NormalizeVendor(vendor string) string {
+	vendor = strings.ToLower(strings.TrimSpace(vendor))
+	if vendor == "" {
+		return VendorNVIDIA
+	}
+	return vendor
 }
 
 // Plugin implements the GPU fractioning NRI handler logic. It has two independent
@@ -84,7 +128,9 @@ type Config struct {
 //     and injects the NVIDIA_GPU_MEMORY_* env vars, CUDA_MPS_PIPE_DIRECTORY, and
 //     the MPS pipe bind mount. When the scheduler also recorded a GPU
 //     device-assignment annotation on the pod it injects NVIDIA_VISIBLE_DEVICES
-//     so the fractional container sees the GPU the scheduler picked.
+//     so the fractional container sees the GPU the scheduler picked. With
+//     Vendor set to VendorAMD it instead sets the container's dmem.max for each
+//     assigned GPU (see package amd).
 //  2. Mapping: it records a container→pod mapping (plus assigned GPU devices and
 //     requested fraction) to a shared directory via an async events processor and
 //     fsstore writer. The metricsd sidecar reads that mapping to attribute GPU
@@ -107,12 +153,27 @@ type Plugin struct {
 	InjectCDIDevice  bool
 	Log              *slog.Logger
 
+	vendor    string
 	events    *events.Processor
 	adapter   adapter
 	readiness ReadinessSetter
 
-	// sentinel runs retroactive enforcement on Synchronize; nil when disabled.
+	// sentinel runs retroactive enforcement on Synchronize; nil when disabled
+	// or with VendorAMD.
 	sentinel *audit.Sentinel
+
+	// reapplyAMD re-applies dmem.max to running AMD GPU containers on
+	// Synchronize (VendorAMD with RetroactiveEnforcement).
+	reapplyAMD bool
+	// dmemCapacity reads the node's dmem regions (VendorAMD).
+	dmemCapacity func() (map[string]int64, error)
+
+	// amdRecheck is the interval of the readiness re-check that runs while an
+	// AMD node has no GPU VRAM dmem region (see startAMDRecheck).
+	amdRecheck  time.Duration
+	recheckMu   sync.Mutex
+	stopRecheck context.CancelFunc
+	recheckDone chan struct{}
 }
 
 // NewPlugin creates a Plugin from cfg. Empty mapping defaults are filled in so a
@@ -139,8 +200,23 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		LogEvents: func() bool { return logPodEvents },
 	})
 
+	vendor := NormalizeVendor(cfg.Vendor)
+	var dmemCapacity func() (map[string]int64, error)
+	switch vendor {
+	case VendorNVIDIA:
+	case VendorAMD:
+		cfg.SupportSMSharing = false // no MPS on AMD GPUs: sm-sharing is rejected like an invalid mode
+		capacityFile := cfg.DmemCapacityFile
+		if capacityFile == "" {
+			capacityFile = DefaultDmemCapacityFile
+		}
+		dmemCapacity = func() (map[string]int64, error) { return readDmemCapacity(capacityFile) }
+	default:
+		return nil, fmt.Errorf("unknown GPU vendor %q (use %q or %q)", cfg.Vendor, VendorNVIDIA, VendorAMD)
+	}
+
 	var sentinel *audit.Sentinel
-	if cfg.RetroactiveEnforcement {
+	if cfg.RetroactiveEnforcement && vendor == VendorNVIDIA {
 		if stopper == nil {
 			return nil, fmt.Errorf("retroactive enforcement enabled but no container stopper was provided")
 		}
@@ -159,11 +235,25 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		SupportSMSharing: cfg.SupportSMSharing,
 		InjectCDIDevice:  cfg.InjectCDIDevice,
 		Log:              log,
+		vendor:           vendor,
 		events:           proc,
 		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, log: log},
 		readiness:        cfg.Readiness,
 		sentinel:         sentinel,
+		reapplyAMD:       vendor == VendorAMD && cfg.RetroactiveEnforcement,
+		dmemCapacity:     dmemCapacity,
+		amdRecheck:       DefaultAMDReadinessRecheck,
 	}, nil
+}
+
+// readDmemCapacity reads and parses a dmem.capacity file.
+func readDmemCapacity(path string) (map[string]int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read the host's dmem.capacity (mount the host's /sys/fs/cgroup read-only, or set --dmem-capacity-file): %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	return amd.ParseCapacity(f)
 }
 
 // setReady updates the shared readiness state, if one was configured.
@@ -194,6 +284,13 @@ func (p *Plugin) Configure(ctx context.Context, _, runtime, version string) (api
 // down) and stops them off the hot path. Detection is synchronous and cheap;
 // the stopping happens on a background goroutine so it never stalls this NRI
 // callback.
+//
+// With VendorAMD the plugin is ready only once the node has a dmem region for
+// GPU VRAM; until then it re-checks on a timer (startAMDRecheck). Retroactive
+// enforcement returns container updates instead of stopping containers: the
+// limit is a cgroup file, so a running container that has no dmem.max (it was
+// created while fractiond was down) gets it set in place, without a restart.
+// dmem.capacity is read once per Synchronize.
 func (p *Plugin) Synchronize(ctx context.Context, pods []*api.PodSandbox, containers []*api.Container) ([]*api.ContainerUpdate, error) {
 	p.Log.InfoContext(ctx, "synchronizing container mapping with runtime",
 		"pods", len(pods), "containers", len(containers))
@@ -203,11 +300,142 @@ func (p *Plugin) Synchronize(ctx context.Context, pods []*api.PodSandbox, contai
 			"recordedContainers", len(infos), "totalContainers", len(containers))
 		return infos
 	})
+	if p.vendor == VendorAMD {
+		p.stopAMDRecheck()
+		regions, ready := p.checkAMDNode(ctx, true)
+		p.setReady(ready)
+		if !ready {
+			p.startAMDRecheck()
+			return nil, nil
+		}
+		if !p.reapplyAMD {
+			return nil, nil
+		}
+		return p.amdReapply(ctx, pods, containers, regions), nil
+	}
 	p.setReady(true)
 	if p.sentinel != nil {
 		p.sentinel.Audit(ctx, pods, containers)
 	}
 	return nil, nil
+}
+
+// checkAMDNode reports whether this node can enforce AMD GPU memory: its
+// dmem.capacity lists at least one GPU VRAM region. amdgpu registers one per GPU
+// from Linux 6.15 on; on an older kernel, or with amdgpu not bound, there is none,
+// and every limit the runtime tried to write would fail. It returns the regions
+// it read, for the caller to reuse. logNotReady is false on the periodic
+// re-check, which would otherwise log the same error every interval.
+func (p *Plugin) checkAMDNode(ctx context.Context, logNotReady bool) (map[string]int64, bool) {
+	regions, err := p.dmemCapacity()
+	if err != nil {
+		if logNotReady {
+			p.Log.ErrorContext(ctx, "not ready: cannot check the node's dmem regions; re-checking periodically", "error", err)
+		}
+		return nil, false
+	}
+	vram := amd.VRAMRegions(regions)
+	if len(vram) == 0 {
+		if logNotReady {
+			p.Log.ErrorContext(ctx, "not ready: no GPU VRAM is a dmem region on this node; AMD GPU memory limits need Linux 6.15+ with amdgpu bound to the GPUs and cgroup v2; re-checking periodically",
+				"dmemRegions", len(regions))
+		}
+		return nil, false
+	}
+	p.Log.InfoContext(ctx, "AMD GPU VRAM dmem regions found", "regions", vram)
+	return regions, true
+}
+
+// startAMDRecheck re-reads dmem.capacity every amdRecheck until the node has a
+// GPU VRAM region, then marks the plugin ready. Readiness is otherwise set only
+// on Synchronize, once per NRI connection, so without it a node where amdgpu
+// binds after fractiond connected (boot order, a driver reload or upgrade, a
+// driver DaemonSet that lands later) would stay not ready for good.
+// CreateContainer reads dmem.capacity itself, so new containers are limited as
+// soon as the regions exist; running containers that miss a limit are
+// re-applied on the next Synchronize.
+func (p *Plugin) startAMDRecheck() {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	p.recheckMu.Lock()
+	p.stopRecheck, p.recheckDone = cancel, done
+	p.recheckMu.Unlock()
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(p.amdRecheck)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if _, ok := p.checkAMDNode(ctx, false); ok {
+				p.Log.InfoContext(ctx, "ready: the node now has GPU VRAM dmem regions")
+				p.setReady(true)
+				return
+			}
+		}
+	}()
+}
+
+// stopAMDRecheck stops a running readiness re-check and waits for it to exit,
+// so it cannot mark the plugin ready after Synchronize or Shutdown has decided.
+func (p *Plugin) stopAMDRecheck() {
+	p.recheckMu.Lock()
+	cancel, done := p.stopRecheck, p.recheckDone
+	p.stopRecheck, p.recheckDone = nil, nil
+	p.recheckMu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
+	}
+}
+
+// amdReapply returns an update setting dmem.max on each created, running or
+// paused fractional AMD GPU container whose cgroup does not carry the limit its
+// annotations ask for, using the dmem regions Synchronize read. Updates are
+// marked ignore-failure, so one container the runtime cannot update does not
+// fail the whole synchronization.
+//
+// This is best-effort, unlike the NVIDIA sentinel, which stops a container it
+// cannot fix: a container whose limit cannot be computed, or whose update the
+// runtime refuses, keeps running without the cap (also with fail-open off)
+// until the next Synchronize.
+func (p *Plugin) amdReapply(ctx context.Context, pods []*api.PodSandbox, containers []*api.Container, regions map[string]int64) []*api.ContainerUpdate {
+	podByID := make(map[string]*api.PodSandbox, len(pods))
+	for _, pod := range pods {
+		podByID[pod.GetId()] = pod
+	}
+	var updates []*api.ContainerUpdate
+	for _, ctr := range containers {
+		switch ctr.GetState() {
+		case api.ContainerState_CONTAINER_CREATED, api.ContainerState_CONTAINER_RUNNING, api.ContainerState_CONTAINER_PAUSED:
+		default:
+			continue
+		}
+		pod := podByID[ctr.GetPodSandboxId()]
+		if pod == nil {
+			continue
+		}
+		value, ok, err := p.amdMaxValue(pod, ctr, regions)
+		if err != nil {
+			p.Log.WarnContext(ctx, "cannot re-apply the AMD GPU memory limit to a running container; it keeps running without the cap",
+				"container", ctr.GetName(), "pod", pod.GetName(), "error", err)
+			continue
+		}
+		if !ok || ctr.GetLinux().GetResources().GetUnified()[amd.UnifiedMax] == value {
+			continue
+		}
+		u := &api.ContainerUpdate{}
+		u.SetContainerId(ctr.GetId())
+		u.AddLinuxUnified(amd.UnifiedMax, value)
+		u.SetIgnoreFailure()
+		updates = append(updates, u)
+		p.Log.InfoContext(ctx, "asking the runtime to set the AMD GPU memory limit on a container created without it; if the runtime refuses, the container keeps running without the cap",
+			"container", ctr.GetName(), "pod", pod.GetName(), "limit", value)
+	}
+	return updates
 }
 
 // CreateContainer evaluates a container's pod annotations and returns an
@@ -284,6 +512,9 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		)
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
+	if p.vendor == VendorAMD {
+		return p.amdAdjustment(pod, ctr, gpuMemoryCfg)
+	}
 	pipeSource, pipeDestination := injection.MPSPipeMount(p.MPSPipeDirectory, computeMode)
 
 	adj := &api.ContainerAdjustment{}
@@ -343,6 +574,86 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	return adj, nil
 }
 
+// amdAdjustment enforces an AMD GPU container's memory with the dmem cgroup
+// controller: the runtime writes dmem.max (the limit) for each assigned GPU's
+// VRAM region on the container's cgroup, and the kernel refuses allocations past
+// it. The GPU itself reaches the container through the device plugin or the
+// scheduler's own device injection; no env var or mount is added. Errors,
+// including a GPU whose VRAM is not a dmem region on this node, follow FailOpen
+// like annotation errors.
+func (p *Plugin) amdAdjustment(pod *api.PodSandbox, ctr *api.Container, cfg annotations.GPUMemoryConfig) (*api.ContainerAdjustment, error) {
+	devices, err := amd.Devices(annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix))
+	var maxValue string
+	if err == nil {
+		maxValue, err = amd.MaxValue(cfg.Limit, devices)
+	}
+	if err == nil {
+		var regions map[string]int64
+		if regions, err = p.dmemCapacity(); err == nil {
+			err = checkAMDRegions(devices, regions)
+		}
+	}
+	if err != nil {
+		p.Log.Warn("cannot limit AMD GPU memory", "container", ctr.Name, "pod", pod.Name, "error", err)
+		if !p.FailOpen {
+			return nil, fmt.Errorf("container %q in pod %q: %w", ctr.Name, pod.Name, err)
+		}
+		p.Log.Warn("starting the container without an AMD GPU memory limit (fail-open)", "container", ctr.Name, "pod", pod.Name)
+		return nil, nil
+	}
+	adj := &api.ContainerAdjustment{}
+	adj.AddLinuxUnified(amd.UnifiedMax, maxValue)
+	p.Log.Info("adjusting container with AMD GPU memory limits",
+		"container", ctr.Name,
+		"pod", pod.Name,
+		"requestMiB", cfg.Request,
+		"limitMiB", cfg.Limit,
+		"devices", devices,
+	)
+	return adj, nil
+}
+
+// checkAMDRegions returns an error unless each device's VRAM is a dmem region on
+// this node. Without the region the runtime's write of dmem.max fails inside
+// the runtime, after this plugin has returned, as an opaque container-creation
+// error that --fail-open cannot catch; checking here makes the failure clear and
+// lets fail-open apply. CreateContainer reads dmem.capacity for each container,
+// so a GPU whose driver binds later is picked up without a restart.
+func checkAMDRegions(devices []string, regions map[string]int64) error {
+	for _, d := range devices {
+		if _, ok := regions[amd.Region(d)]; !ok {
+			return fmt.Errorf("GPU %s has no dmem VRAM region on this node (dmem.capacity lists %v); AMD GPU memory limits need Linux 6.15+ with amdgpu bound to the GPU",
+				d, amd.VRAMRegions(regions))
+		}
+	}
+	return nil
+}
+
+// amdMaxValue returns the dmem.max value a container's annotations ask for; ok
+// is false for a container without GPU-memory annotations. regions is the
+// node's dmem.capacity, read once by the caller.
+func (p *Plugin) amdMaxValue(pod *api.PodSandbox, ctr *api.Container, regions map[string]int64) (value string, ok bool, err error) {
+	cfg, err := annotations.ParseGPUMemoryAnnotations(pod.GetAnnotations(), ctr.GetName(), p.AnnotationPrefix)
+	if err != nil {
+		return "", false, err
+	}
+	if cfg.IsEmpty() {
+		return "", false, nil
+	}
+	cfg = cfg.ApplyDefaults()
+	devices, err := amd.Devices(annotations.ParseVisibleDevices(pod.GetAnnotations(), ctr.GetName(), p.AnnotationPrefix))
+	if err == nil {
+		value, err = amd.MaxValue(cfg.Limit, devices)
+	}
+	if err == nil {
+		err = checkAMDRegions(devices, regions)
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
 // containerHasEnv reports whether the container's spec already defines the given
 // environment variable (as "KEY=VALUE" or a bare "KEY"), so the caller can
 // replace it rather than append a duplicate.
@@ -366,6 +677,7 @@ func (p *Plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.
 // remediation when the runtime disconnects, and marks the plugin not-ready until
 // the next successful Synchronize.
 func (p *Plugin) Shutdown(_ context.Context) {
+	p.stopAMDRecheck()
 	p.setReady(false)
 	p.events.Flush()
 	if p.sentinel != nil {
